@@ -1,0 +1,2039 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: mlops-pipeline-
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.22, pipelines.kubeflow.org/pipeline_compilation_time: '2026-05-07T14:17:07.424355',
+    pipelines.kubeflow.org/pipeline_spec: '{"inputs": [{"default": "csv-data", "name":
+      "bucket", "optional": true, "type": "String"}], "name": "mlops-pipeline"}'}
+  labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.22}
+spec:
+  entrypoint: mlops-pipeline
+  templates:
+  - name: evaluate
+    container:
+      args: [--data-input, /tmp/inputs/data_input/data, --model-input, /tmp/inputs/model_input/data,
+        --output-data, /tmp/outputs/output_data/data, --plot-output, /tmp/outputs/plot_output/data,
+        --test-metrics, /tmp/outputs/test_metrics/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef evaluate(\n    data_input,\n    model_input,\n    output_data,\n   \
+        \ plot_output,\n    test_metrics\n):\n    import os\n    import json\n   \
+        \ import numpy as np\n    import tensorflow as tf\n    import matplotlib\n\
+        \    matplotlib.use(\"Agg\")\n    import matplotlib.pyplot as plt\n    import\
+        \ joblib\n    import tempfile\n\n    from sklearn.metrics import mean_squared_error,\
+        \ mean_absolute_error, r2_score\n\n    print(\"=== D\xE9but \xE9valuation\
+        \ ===\")\n\n    # -----------------------------\n    # LOAD DATA\n    # -----------------------------\n\
+        \    data = np.load(data_input, allow_pickle=True)\n\n    X_test  = data[\"\
+        X_test\"]\n    y_test  = data[\"y_test\"]\n    horizon = int(data[\"horizon\"\
+        ])\n    FEATURES = data[\"feature_names\"]\n\n    # -----------------------------\n\
+        \    # LOAD MODEL\n    # -----------------------------\n    model_files =\
+        \ os.listdir(model_input)\n    model_path  = os.path.join(model_input, model_files[0])\n\
+        \    model       = tf.keras.models.load_model(model_path, compile=False)\n\
+        \n    # -----------------------------\n    # DETECT MODEL NAME           \n\
+        \    # -----------------------------\n    def detect_model_name(path):\n \
+        \       p = path.lower()\n        if \"cnn-lstm\" in p:\n            return\
+        \ \"CNN-LSTM\"\n        elif \"cnn\" in p:\n            return \"CNN\"\n \
+        \       elif \"fnn\" in p:\n            return \"FNN\"\n\n    model_name =\
+        \ detect_model_name(model_path)\n    print(f\"Mod\xE8le d\xE9tect\xE9 : {model_name}\"\
+        )\n\n    # -----------------------------\n    # PREDICTION\n    # -----------------------------\n\
+        \    y_pred = model.predict(X_test)\n\n    # -----------------------------\n\
+        \    # LOAD SCALER\n    # -----------------------------\n    scaler_bytes\
+        \ = data[\"scaler\"].item()\n\n    tmp_scaler = tempfile.mktemp(suffix=\"\
+        .save\")\n    with open(tmp_scaler, \"wb\") as f:\n        f.write(scaler_bytes)\n\
+        \n    scaler = joblib.load(tmp_scaler)\n    os.remove(tmp_scaler)\n\n    #\
+        \ -----------------------------\n    # INVERSE TRANSFORM\n    # -----------------------------\n\
+        \    y_test_unscaled = scaler.inverse_transform(y_test)\n    y_pred_unscaled\
+        \ = scaler.inverse_transform(y_pred)\n\n    # -----------------------------\n\
+        \    # FEATURE TYPES\n    # -----------------------------\n    feature_types\
+        \ = {}\n    for f in FEATURES:\n        if \"Jitter\" in f:\n            feature_types[f]\
+        \ = \"jitter\"\n        elif \"CQI\" in f:\n            feature_types[f] =\
+        \ \"cqi\"\n        else:\n            feature_types[f] = \"throughput\"\n\n\
+        \    # -----------------------------\n    # METRICS FUNCTIONS\n    # -----------------------------\n\
+        \    def calculate_metrics(y_true, y_pred):\n        rmse = np.sqrt(mean_squared_error(y_true,\
+        \ y_pred))\n        mae  = mean_absolute_error(y_true, y_pred)\n        r2\
+        \   = r2_score(y_true, y_pred)\n        return {\n            \"rmse\": float(rmse),\n\
+        \            \"mae\":  float(mae),\n            \"r2\":   float(r2),\n   \
+        \     }\n\n    # -----------------------------\n    # METRICS PER FEATURE\n\
+        \    # -----------------------------\n    all_metrics = {}\n\n    print(\"\
+        \\n\" + \"=\" * 80)\n    print(\"M\xC9TRIQUES PAR FEATURE\")\n    print(\"\
+        =\" * 80)\n    print(f\"{'Feature':<20} {'RMSE':<10} {'MAE':<10} {'R2':<8}\"\
+        )\n    print(\"-\" * 70)\n\n    for i, feature in enumerate(FEATURES):\n \
+        \       if i >= y_test_unscaled.shape[1]:\n            break\n\n        y_true_f\
+        \ = y_test_unscaled[:, i]\n        y_pred_f = y_pred_unscaled[:, i]\n\n  \
+        \      metrics = calculate_metrics(y_true_f, y_pred_f)\n        all_metrics[feature]\
+        \ = metrics\n\n        print(\n            f\"{feature:<20} \"\n         \
+        \   f\"{metrics['rmse']:<10.4f} \"\n            f\"{metrics['mae']:<10.4f}\
+        \ \"\n            f\"{metrics['r2']:<8.4f}\"\n        )\n\n    # -----------------------------\n\
+        \    # SAVE METRICS\n    # -----------------------------\n    with open(test_metrics,\
+        \ \"w\") as f:\n        json.dump({\n            \"model_name\": model_name,\n\
+        \            \"horizon\":    horizon,\n            \"features\":   all_metrics\n\
+        \        }, f, indent=2)\n\n    # -----------------------------\n    # PLOT\
+        \ FUNCTION\n    # -----------------------------\n    def plot_feature(actual,\
+        \ predicted, feature_name, metrics, horizon):\n        fig, ax = plt.subplots(figsize=(10,\
+        \ 4))\n\n        steps = min(200, len(actual))\n        t     = range(steps)\n\
+        \n        ax.plot(t, actual[:steps],    label=\"Actual\",    linewidth=1.5)\n\
+        \        ax.plot(t, predicted[:steps], label=\"Predicted\", linestyle=\"--\"\
+        , linewidth=1.5)\n\n        if \"web\" in feature_name or \"sipp\" in feature_name:\n\
+        \            ylabel = \"Throughput (Kbps)\"\n        elif \"Jitter\" in feature_name:\n\
+        \            ylabel = \"Jitter (ms)\"\n        elif \"CQI\" in feature_name:\n\
+        \            ylabel = \"CQI\"\n        else:\n            ylabel = \"Value\"\
+        \n\n        ax.set_xlabel(\"Time Slots\")\n        ax.set_ylabel(ylabel)\n\
+        \        ax.set_title(\n            f\"[{model_name}] {feature_name}\\n\"\
+        \   \n            f\"MAE={metrics['mae']:.3f}\"\n        )\n        ax.legend()\n\
+        \        ax.grid(True, alpha=0.3)\n        plt.tight_layout()\n\n        safe\
+        \ = feature_name.replace(\":\", \"\").replace(\" \", \"_\")\n        plt.savefig(os.path.join(plot_output,\
+        \ f\"{model_name}_h{horizon}_{safe}.pdf\"))  \n        plt.close()\n\n   \
+        \ # -----------------------------\n    # CREATE PLOTS\n    # -----------------------------\n\
+        \    os.makedirs(plot_output, exist_ok=True)\n\n    for i, feature in enumerate(FEATURES):\n\
+        \        if i < y_test_unscaled.shape[1]:\n            plot_feature(\n   \
+        \             y_test_unscaled[:, i],\n                y_pred_unscaled[:, i],\n\
+        \                feature,\n                all_metrics[feature],\n       \
+        \         horizon\n            )\n\n    # -----------------------------\n\
+        \    # SAVE PREDICTIONS\n    # -----------------------------\n    with open(output_data,\
+        \ \"wb\") as f:\n        np.savez_compressed(\n            f,\n          \
+        \  y_pred=y_pred_unscaled,\n            y_true=y_test_unscaled,\n        \
+        \    feature_names=FEATURES\n        )\n\n    print(f\"\\n\u2714 {len(FEATURES)}\
+        \ features \xE9valu\xE9es\")\n    print(\"=== Fin \xE9valuation ===\")\n\n\
+        import argparse\n_parser = argparse.ArgumentParser(prog='Evaluate', description='')\n\
+        _parser.add_argument(\"--data-input\", dest=\"data_input\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-input\", dest=\"\
+        model_input\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --output-data\", dest=\"output_data\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\"\
+        , dest=\"plot_output\", type=_make_parent_dirs_and_return_path, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-metrics\", dest=\"\
+        test_metrics\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
+        _parsed_args = vars(_parser.parse_args())\n\n_outputs = evaluate(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: preprocess-output, path: /tmp/inputs/data_input/data}
+      - {name: train-fnn-category-model_output, path: /tmp/inputs/model_input/data}
+    outputs:
+      artifacts:
+      - {name: evaluate-output_data, path: /tmp/outputs/output_data/data}
+      - {name: evaluate-plot_output, path: /tmp/outputs/plot_output/data}
+      - {name: evaluate-test_metrics, path: /tmp/outputs/test_metrics/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "false"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--data-input", {"inputPath": "data_input"}, "--model-input",
+          {"inputPath": "model_input"}, "--output-data", {"outputPath": "output_data"},
+          "--plot-output", {"outputPath": "plot_output"}, "--test-metrics", {"outputPath":
+          "test_metrics"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n    os.makedirs(os.path.dirname(file_path),
+          exist_ok=True)\n    return file_path\n\ndef evaluate(\n    data_input,\n    model_input,\n    output_data,\n    plot_output,\n    test_metrics\n):\n    import
+          os\n    import json\n    import numpy as np\n    import tensorflow as tf\n    import
+          matplotlib\n    matplotlib.use(\"Agg\")\n    import matplotlib.pyplot as
+          plt\n    import joblib\n    import tempfile\n\n    from sklearn.metrics
+          import mean_squared_error, mean_absolute_error, r2_score\n\n    print(\"===
+          D\u00e9but \u00e9valuation ===\")\n\n    # -----------------------------\n    #
+          LOAD DATA\n    # -----------------------------\n    data = np.load(data_input,
+          allow_pickle=True)\n\n    X_test  = data[\"X_test\"]\n    y_test  = data[\"y_test\"]\n    horizon
+          = int(data[\"horizon\"])\n    FEATURES = data[\"feature_names\"]\n\n    #
+          -----------------------------\n    # LOAD MODEL\n    # -----------------------------\n    model_files
+          = os.listdir(model_input)\n    model_path  = os.path.join(model_input, model_files[0])\n    model       =
+          tf.keras.models.load_model(model_path, compile=False)\n\n    # -----------------------------\n    #
+          DETECT MODEL NAME           \n    # -----------------------------\n    def
+          detect_model_name(path):\n        p = path.lower()\n        if \"cnn-lstm\"
+          in p:\n            return \"CNN-LSTM\"\n        elif \"cnn\" in p:\n            return
+          \"CNN\"\n        elif \"fnn\" in p:\n            return \"FNN\"\n\n    model_name
+          = detect_model_name(model_path)\n    print(f\"Mod\u00e8le d\u00e9tect\u00e9
+          : {model_name}\")\n\n    # -----------------------------\n    # PREDICTION\n    #
+          -----------------------------\n    y_pred = model.predict(X_test)\n\n    #
+          -----------------------------\n    # LOAD SCALER\n    # -----------------------------\n    scaler_bytes
+          = data[\"scaler\"].item()\n\n    tmp_scaler = tempfile.mktemp(suffix=\".save\")\n    with
+          open(tmp_scaler, \"wb\") as f:\n        f.write(scaler_bytes)\n\n    scaler
+          = joblib.load(tmp_scaler)\n    os.remove(tmp_scaler)\n\n    # -----------------------------\n    #
+          INVERSE TRANSFORM\n    # -----------------------------\n    y_test_unscaled
+          = scaler.inverse_transform(y_test)\n    y_pred_unscaled = scaler.inverse_transform(y_pred)\n\n    #
+          -----------------------------\n    # FEATURE TYPES\n    # -----------------------------\n    feature_types
+          = {}\n    for f in FEATURES:\n        if \"Jitter\" in f:\n            feature_types[f]
+          = \"jitter\"\n        elif \"CQI\" in f:\n            feature_types[f] =
+          \"cqi\"\n        else:\n            feature_types[f] = \"throughput\"\n\n    #
+          -----------------------------\n    # METRICS FUNCTIONS\n    # -----------------------------\n    def
+          calculate_metrics(y_true, y_pred):\n        rmse = np.sqrt(mean_squared_error(y_true,
+          y_pred))\n        mae  = mean_absolute_error(y_true, y_pred)\n        r2   =
+          r2_score(y_true, y_pred)\n        return {\n            \"rmse\": float(rmse),\n            \"mae\":  float(mae),\n            \"r2\":   float(r2),\n        }\n\n    #
+          -----------------------------\n    # METRICS PER FEATURE\n    # -----------------------------\n    all_metrics
+          = {}\n\n    print(\"\\n\" + \"=\" * 80)\n    print(\"M\u00c9TRIQUES PAR
+          FEATURE\")\n    print(\"=\" * 80)\n    print(f\"{''Feature'':<20} {''RMSE'':<10}
+          {''MAE'':<10} {''R2'':<8}\")\n    print(\"-\" * 70)\n\n    for i, feature
+          in enumerate(FEATURES):\n        if i >= y_test_unscaled.shape[1]:\n            break\n\n        y_true_f
+          = y_test_unscaled[:, i]\n        y_pred_f = y_pred_unscaled[:, i]\n\n        metrics
+          = calculate_metrics(y_true_f, y_pred_f)\n        all_metrics[feature] =
+          metrics\n\n        print(\n            f\"{feature:<20} \"\n            f\"{metrics[''rmse'']:<10.4f}
+          \"\n            f\"{metrics[''mae'']:<10.4f} \"\n            f\"{metrics[''r2'']:<8.4f}\"\n        )\n\n    #
+          -----------------------------\n    # SAVE METRICS\n    # -----------------------------\n    with
+          open(test_metrics, \"w\") as f:\n        json.dump({\n            \"model_name\":
+          model_name,\n            \"horizon\":    horizon,\n            \"features\":   all_metrics\n        },
+          f, indent=2)\n\n    # -----------------------------\n    # PLOT FUNCTION\n    #
+          -----------------------------\n    def plot_feature(actual, predicted, feature_name,
+          metrics, horizon):\n        fig, ax = plt.subplots(figsize=(10, 4))\n\n        steps
+          = min(200, len(actual))\n        t     = range(steps)\n\n        ax.plot(t,
+          actual[:steps],    label=\"Actual\",    linewidth=1.5)\n        ax.plot(t,
+          predicted[:steps], label=\"Predicted\", linestyle=\"--\", linewidth=1.5)\n\n        if
+          \"web\" in feature_name or \"sipp\" in feature_name:\n            ylabel
+          = \"Throughput (Kbps)\"\n        elif \"Jitter\" in feature_name:\n            ylabel
+          = \"Jitter (ms)\"\n        elif \"CQI\" in feature_name:\n            ylabel
+          = \"CQI\"\n        else:\n            ylabel = \"Value\"\n\n        ax.set_xlabel(\"Time
+          Slots\")\n        ax.set_ylabel(ylabel)\n        ax.set_title(\n            f\"[{model_name}]
+          {feature_name}\\n\"   \n            f\"MAE={metrics[''mae'']:.3f}\"\n        )\n        ax.legend()\n        ax.grid(True,
+          alpha=0.3)\n        plt.tight_layout()\n\n        safe = feature_name.replace(\":\",
+          \"\").replace(\" \", \"_\")\n        plt.savefig(os.path.join(plot_output,
+          f\"{model_name}_h{horizon}_{safe}.pdf\"))  \n        plt.close()\n\n    #
+          -----------------------------\n    # CREATE PLOTS\n    # -----------------------------\n    os.makedirs(plot_output,
+          exist_ok=True)\n\n    for i, feature in enumerate(FEATURES):\n        if
+          i < y_test_unscaled.shape[1]:\n            plot_feature(\n                y_test_unscaled[:,
+          i],\n                y_pred_unscaled[:, i],\n                feature,\n                all_metrics[feature],\n                horizon\n            )\n\n    #
+          -----------------------------\n    # SAVE PREDICTIONS\n    # -----------------------------\n    with
+          open(output_data, \"wb\") as f:\n        np.savez_compressed(\n            f,\n            y_pred=y_pred_unscaled,\n            y_true=y_test_unscaled,\n            feature_names=FEATURES\n        )\n\n    print(f\"\\n\u2714
+          {len(FEATURES)} features \u00e9valu\u00e9es\")\n    print(\"=== Fin \u00e9valuation
+          ===\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Evaluate'',
+          description='''')\n_parser.add_argument(\"--data-input\", dest=\"data_input\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-input\",
+          dest=\"model_input\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--output-data\",
+          dest=\"output_data\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\", dest=\"plot_output\",
+          type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-metrics\",
+          dest=\"test_metrics\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = evaluate(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "data_input", "type": "String"}, {"name": "model_input",
+          "type": "String"}], "name": "Evaluate", "outputs": [{"name": "output_data",
+          "type": "String"}, {"name": "plot_output", "type": "String"}, {"name": "test_metrics",
+          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}'}
+  - name: evaluate-2
+    container:
+      args: [--data-input, /tmp/inputs/data_input/data, --model-input, /tmp/inputs/model_input/data,
+        --output-data, /tmp/outputs/output_data/data, --plot-output, /tmp/outputs/plot_output/data,
+        --test-metrics, /tmp/outputs/test_metrics/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef evaluate(\n    data_input,\n    model_input,\n    output_data,\n   \
+        \ plot_output,\n    test_metrics\n):\n    import os\n    import json\n   \
+        \ import numpy as np\n    import tensorflow as tf\n    import matplotlib\n\
+        \    matplotlib.use(\"Agg\")\n    import matplotlib.pyplot as plt\n    import\
+        \ joblib\n    import tempfile\n\n    from sklearn.metrics import mean_squared_error,\
+        \ mean_absolute_error, r2_score\n\n    print(\"=== D\xE9but \xE9valuation\
+        \ ===\")\n\n    # -----------------------------\n    # LOAD DATA\n    # -----------------------------\n\
+        \    data = np.load(data_input, allow_pickle=True)\n\n    X_test  = data[\"\
+        X_test\"]\n    y_test  = data[\"y_test\"]\n    horizon = int(data[\"horizon\"\
+        ])\n    FEATURES = data[\"feature_names\"]\n\n    # -----------------------------\n\
+        \    # LOAD MODEL\n    # -----------------------------\n    model_files =\
+        \ os.listdir(model_input)\n    model_path  = os.path.join(model_input, model_files[0])\n\
+        \    model       = tf.keras.models.load_model(model_path, compile=False)\n\
+        \n    # -----------------------------\n    # DETECT MODEL NAME           \n\
+        \    # -----------------------------\n    def detect_model_name(path):\n \
+        \       p = path.lower()\n        if \"cnn-lstm\" in p:\n            return\
+        \ \"CNN-LSTM\"\n        elif \"cnn\" in p:\n            return \"CNN\"\n \
+        \       elif \"fnn\" in p:\n            return \"FNN\"\n\n    model_name =\
+        \ detect_model_name(model_path)\n    print(f\"Mod\xE8le d\xE9tect\xE9 : {model_name}\"\
+        )\n\n    # -----------------------------\n    # PREDICTION\n    # -----------------------------\n\
+        \    y_pred = model.predict(X_test)\n\n    # -----------------------------\n\
+        \    # LOAD SCALER\n    # -----------------------------\n    scaler_bytes\
+        \ = data[\"scaler\"].item()\n\n    tmp_scaler = tempfile.mktemp(suffix=\"\
+        .save\")\n    with open(tmp_scaler, \"wb\") as f:\n        f.write(scaler_bytes)\n\
+        \n    scaler = joblib.load(tmp_scaler)\n    os.remove(tmp_scaler)\n\n    #\
+        \ -----------------------------\n    # INVERSE TRANSFORM\n    # -----------------------------\n\
+        \    y_test_unscaled = scaler.inverse_transform(y_test)\n    y_pred_unscaled\
+        \ = scaler.inverse_transform(y_pred)\n\n    # -----------------------------\n\
+        \    # FEATURE TYPES\n    # -----------------------------\n    feature_types\
+        \ = {}\n    for f in FEATURES:\n        if \"Jitter\" in f:\n            feature_types[f]\
+        \ = \"jitter\"\n        elif \"CQI\" in f:\n            feature_types[f] =\
+        \ \"cqi\"\n        else:\n            feature_types[f] = \"throughput\"\n\n\
+        \    # -----------------------------\n    # METRICS FUNCTIONS\n    # -----------------------------\n\
+        \    def calculate_metrics(y_true, y_pred):\n        rmse = np.sqrt(mean_squared_error(y_true,\
+        \ y_pred))\n        mae  = mean_absolute_error(y_true, y_pred)\n        r2\
+        \   = r2_score(y_true, y_pred)\n        return {\n            \"rmse\": float(rmse),\n\
+        \            \"mae\":  float(mae),\n            \"r2\":   float(r2),\n   \
+        \     }\n\n    # -----------------------------\n    # METRICS PER FEATURE\n\
+        \    # -----------------------------\n    all_metrics = {}\n\n    print(\"\
+        \\n\" + \"=\" * 80)\n    print(\"M\xC9TRIQUES PAR FEATURE\")\n    print(\"\
+        =\" * 80)\n    print(f\"{'Feature':<20} {'RMSE':<10} {'MAE':<10} {'R2':<8}\"\
+        )\n    print(\"-\" * 70)\n\n    for i, feature in enumerate(FEATURES):\n \
+        \       if i >= y_test_unscaled.shape[1]:\n            break\n\n        y_true_f\
+        \ = y_test_unscaled[:, i]\n        y_pred_f = y_pred_unscaled[:, i]\n\n  \
+        \      metrics = calculate_metrics(y_true_f, y_pred_f)\n        all_metrics[feature]\
+        \ = metrics\n\n        print(\n            f\"{feature:<20} \"\n         \
+        \   f\"{metrics['rmse']:<10.4f} \"\n            f\"{metrics['mae']:<10.4f}\
+        \ \"\n            f\"{metrics['r2']:<8.4f}\"\n        )\n\n    # -----------------------------\n\
+        \    # SAVE METRICS\n    # -----------------------------\n    with open(test_metrics,\
+        \ \"w\") as f:\n        json.dump({\n            \"model_name\": model_name,\n\
+        \            \"horizon\":    horizon,\n            \"features\":   all_metrics\n\
+        \        }, f, indent=2)\n\n    # -----------------------------\n    # PLOT\
+        \ FUNCTION\n    # -----------------------------\n    def plot_feature(actual,\
+        \ predicted, feature_name, metrics, horizon):\n        fig, ax = plt.subplots(figsize=(10,\
+        \ 4))\n\n        steps = min(200, len(actual))\n        t     = range(steps)\n\
+        \n        ax.plot(t, actual[:steps],    label=\"Actual\",    linewidth=1.5)\n\
+        \        ax.plot(t, predicted[:steps], label=\"Predicted\", linestyle=\"--\"\
+        , linewidth=1.5)\n\n        if \"web\" in feature_name or \"sipp\" in feature_name:\n\
+        \            ylabel = \"Throughput (Kbps)\"\n        elif \"Jitter\" in feature_name:\n\
+        \            ylabel = \"Jitter (ms)\"\n        elif \"CQI\" in feature_name:\n\
+        \            ylabel = \"CQI\"\n        else:\n            ylabel = \"Value\"\
+        \n\n        ax.set_xlabel(\"Time Slots\")\n        ax.set_ylabel(ylabel)\n\
+        \        ax.set_title(\n            f\"[{model_name}] {feature_name}\\n\"\
+        \   \n            f\"MAE={metrics['mae']:.3f}\"\n        )\n        ax.legend()\n\
+        \        ax.grid(True, alpha=0.3)\n        plt.tight_layout()\n\n        safe\
+        \ = feature_name.replace(\":\", \"\").replace(\" \", \"_\")\n        plt.savefig(os.path.join(plot_output,\
+        \ f\"{model_name}_h{horizon}_{safe}.pdf\"))  \n        plt.close()\n\n   \
+        \ # -----------------------------\n    # CREATE PLOTS\n    # -----------------------------\n\
+        \    os.makedirs(plot_output, exist_ok=True)\n\n    for i, feature in enumerate(FEATURES):\n\
+        \        if i < y_test_unscaled.shape[1]:\n            plot_feature(\n   \
+        \             y_test_unscaled[:, i],\n                y_pred_unscaled[:, i],\n\
+        \                feature,\n                all_metrics[feature],\n       \
+        \         horizon\n            )\n\n    # -----------------------------\n\
+        \    # SAVE PREDICTIONS\n    # -----------------------------\n    with open(output_data,\
+        \ \"wb\") as f:\n        np.savez_compressed(\n            f,\n          \
+        \  y_pred=y_pred_unscaled,\n            y_true=y_test_unscaled,\n        \
+        \    feature_names=FEATURES\n        )\n\n    print(f\"\\n\u2714 {len(FEATURES)}\
+        \ features \xE9valu\xE9es\")\n    print(\"=== Fin \xE9valuation ===\")\n\n\
+        import argparse\n_parser = argparse.ArgumentParser(prog='Evaluate', description='')\n\
+        _parser.add_argument(\"--data-input\", dest=\"data_input\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-input\", dest=\"\
+        model_input\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --output-data\", dest=\"output_data\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\"\
+        , dest=\"plot_output\", type=_make_parent_dirs_and_return_path, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-metrics\", dest=\"\
+        test_metrics\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
+        _parsed_args = vars(_parser.parse_args())\n\n_outputs = evaluate(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: preprocess-output, path: /tmp/inputs/data_input/data}
+      - {name: train-cnn-category-model_output, path: /tmp/inputs/model_input/data}
+    outputs:
+      artifacts:
+      - {name: evaluate-2-output_data, path: /tmp/outputs/output_data/data}
+      - {name: evaluate-2-plot_output, path: /tmp/outputs/plot_output/data}
+      - {name: evaluate-2-test_metrics, path: /tmp/outputs/test_metrics/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "false"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--data-input", {"inputPath": "data_input"}, "--model-input",
+          {"inputPath": "model_input"}, "--output-data", {"outputPath": "output_data"},
+          "--plot-output", {"outputPath": "plot_output"}, "--test-metrics", {"outputPath":
+          "test_metrics"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n    os.makedirs(os.path.dirname(file_path),
+          exist_ok=True)\n    return file_path\n\ndef evaluate(\n    data_input,\n    model_input,\n    output_data,\n    plot_output,\n    test_metrics\n):\n    import
+          os\n    import json\n    import numpy as np\n    import tensorflow as tf\n    import
+          matplotlib\n    matplotlib.use(\"Agg\")\n    import matplotlib.pyplot as
+          plt\n    import joblib\n    import tempfile\n\n    from sklearn.metrics
+          import mean_squared_error, mean_absolute_error, r2_score\n\n    print(\"===
+          D\u00e9but \u00e9valuation ===\")\n\n    # -----------------------------\n    #
+          LOAD DATA\n    # -----------------------------\n    data = np.load(data_input,
+          allow_pickle=True)\n\n    X_test  = data[\"X_test\"]\n    y_test  = data[\"y_test\"]\n    horizon
+          = int(data[\"horizon\"])\n    FEATURES = data[\"feature_names\"]\n\n    #
+          -----------------------------\n    # LOAD MODEL\n    # -----------------------------\n    model_files
+          = os.listdir(model_input)\n    model_path  = os.path.join(model_input, model_files[0])\n    model       =
+          tf.keras.models.load_model(model_path, compile=False)\n\n    # -----------------------------\n    #
+          DETECT MODEL NAME           \n    # -----------------------------\n    def
+          detect_model_name(path):\n        p = path.lower()\n        if \"cnn-lstm\"
+          in p:\n            return \"CNN-LSTM\"\n        elif \"cnn\" in p:\n            return
+          \"CNN\"\n        elif \"fnn\" in p:\n            return \"FNN\"\n\n    model_name
+          = detect_model_name(model_path)\n    print(f\"Mod\u00e8le d\u00e9tect\u00e9
+          : {model_name}\")\n\n    # -----------------------------\n    # PREDICTION\n    #
+          -----------------------------\n    y_pred = model.predict(X_test)\n\n    #
+          -----------------------------\n    # LOAD SCALER\n    # -----------------------------\n    scaler_bytes
+          = data[\"scaler\"].item()\n\n    tmp_scaler = tempfile.mktemp(suffix=\".save\")\n    with
+          open(tmp_scaler, \"wb\") as f:\n        f.write(scaler_bytes)\n\n    scaler
+          = joblib.load(tmp_scaler)\n    os.remove(tmp_scaler)\n\n    # -----------------------------\n    #
+          INVERSE TRANSFORM\n    # -----------------------------\n    y_test_unscaled
+          = scaler.inverse_transform(y_test)\n    y_pred_unscaled = scaler.inverse_transform(y_pred)\n\n    #
+          -----------------------------\n    # FEATURE TYPES\n    # -----------------------------\n    feature_types
+          = {}\n    for f in FEATURES:\n        if \"Jitter\" in f:\n            feature_types[f]
+          = \"jitter\"\n        elif \"CQI\" in f:\n            feature_types[f] =
+          \"cqi\"\n        else:\n            feature_types[f] = \"throughput\"\n\n    #
+          -----------------------------\n    # METRICS FUNCTIONS\n    # -----------------------------\n    def
+          calculate_metrics(y_true, y_pred):\n        rmse = np.sqrt(mean_squared_error(y_true,
+          y_pred))\n        mae  = mean_absolute_error(y_true, y_pred)\n        r2   =
+          r2_score(y_true, y_pred)\n        return {\n            \"rmse\": float(rmse),\n            \"mae\":  float(mae),\n            \"r2\":   float(r2),\n        }\n\n    #
+          -----------------------------\n    # METRICS PER FEATURE\n    # -----------------------------\n    all_metrics
+          = {}\n\n    print(\"\\n\" + \"=\" * 80)\n    print(\"M\u00c9TRIQUES PAR
+          FEATURE\")\n    print(\"=\" * 80)\n    print(f\"{''Feature'':<20} {''RMSE'':<10}
+          {''MAE'':<10} {''R2'':<8}\")\n    print(\"-\" * 70)\n\n    for i, feature
+          in enumerate(FEATURES):\n        if i >= y_test_unscaled.shape[1]:\n            break\n\n        y_true_f
+          = y_test_unscaled[:, i]\n        y_pred_f = y_pred_unscaled[:, i]\n\n        metrics
+          = calculate_metrics(y_true_f, y_pred_f)\n        all_metrics[feature] =
+          metrics\n\n        print(\n            f\"{feature:<20} \"\n            f\"{metrics[''rmse'']:<10.4f}
+          \"\n            f\"{metrics[''mae'']:<10.4f} \"\n            f\"{metrics[''r2'']:<8.4f}\"\n        )\n\n    #
+          -----------------------------\n    # SAVE METRICS\n    # -----------------------------\n    with
+          open(test_metrics, \"w\") as f:\n        json.dump({\n            \"model_name\":
+          model_name,\n            \"horizon\":    horizon,\n            \"features\":   all_metrics\n        },
+          f, indent=2)\n\n    # -----------------------------\n    # PLOT FUNCTION\n    #
+          -----------------------------\n    def plot_feature(actual, predicted, feature_name,
+          metrics, horizon):\n        fig, ax = plt.subplots(figsize=(10, 4))\n\n        steps
+          = min(200, len(actual))\n        t     = range(steps)\n\n        ax.plot(t,
+          actual[:steps],    label=\"Actual\",    linewidth=1.5)\n        ax.plot(t,
+          predicted[:steps], label=\"Predicted\", linestyle=\"--\", linewidth=1.5)\n\n        if
+          \"web\" in feature_name or \"sipp\" in feature_name:\n            ylabel
+          = \"Throughput (Kbps)\"\n        elif \"Jitter\" in feature_name:\n            ylabel
+          = \"Jitter (ms)\"\n        elif \"CQI\" in feature_name:\n            ylabel
+          = \"CQI\"\n        else:\n            ylabel = \"Value\"\n\n        ax.set_xlabel(\"Time
+          Slots\")\n        ax.set_ylabel(ylabel)\n        ax.set_title(\n            f\"[{model_name}]
+          {feature_name}\\n\"   \n            f\"MAE={metrics[''mae'']:.3f}\"\n        )\n        ax.legend()\n        ax.grid(True,
+          alpha=0.3)\n        plt.tight_layout()\n\n        safe = feature_name.replace(\":\",
+          \"\").replace(\" \", \"_\")\n        plt.savefig(os.path.join(plot_output,
+          f\"{model_name}_h{horizon}_{safe}.pdf\"))  \n        plt.close()\n\n    #
+          -----------------------------\n    # CREATE PLOTS\n    # -----------------------------\n    os.makedirs(plot_output,
+          exist_ok=True)\n\n    for i, feature in enumerate(FEATURES):\n        if
+          i < y_test_unscaled.shape[1]:\n            plot_feature(\n                y_test_unscaled[:,
+          i],\n                y_pred_unscaled[:, i],\n                feature,\n                all_metrics[feature],\n                horizon\n            )\n\n    #
+          -----------------------------\n    # SAVE PREDICTIONS\n    # -----------------------------\n    with
+          open(output_data, \"wb\") as f:\n        np.savez_compressed(\n            f,\n            y_pred=y_pred_unscaled,\n            y_true=y_test_unscaled,\n            feature_names=FEATURES\n        )\n\n    print(f\"\\n\u2714
+          {len(FEATURES)} features \u00e9valu\u00e9es\")\n    print(\"=== Fin \u00e9valuation
+          ===\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Evaluate'',
+          description='''')\n_parser.add_argument(\"--data-input\", dest=\"data_input\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-input\",
+          dest=\"model_input\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--output-data\",
+          dest=\"output_data\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\", dest=\"plot_output\",
+          type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-metrics\",
+          dest=\"test_metrics\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = evaluate(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "data_input", "type": "String"}, {"name": "model_input",
+          "type": "String"}], "name": "Evaluate", "outputs": [{"name": "output_data",
+          "type": "String"}, {"name": "plot_output", "type": "String"}, {"name": "test_metrics",
+          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}'}
+  - name: evaluate-3
+    container:
+      args: [--data-input, /tmp/inputs/data_input/data, --model-input, /tmp/inputs/model_input/data,
+        --output-data, /tmp/outputs/output_data/data, --plot-output, /tmp/outputs/plot_output/data,
+        --test-metrics, /tmp/outputs/test_metrics/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef evaluate(\n    data_input,\n    model_input,\n    output_data,\n   \
+        \ plot_output,\n    test_metrics\n):\n    import os\n    import json\n   \
+        \ import numpy as np\n    import tensorflow as tf\n    import matplotlib\n\
+        \    matplotlib.use(\"Agg\")\n    import matplotlib.pyplot as plt\n    import\
+        \ joblib\n    import tempfile\n\n    from sklearn.metrics import mean_squared_error,\
+        \ mean_absolute_error, r2_score\n\n    print(\"=== D\xE9but \xE9valuation\
+        \ ===\")\n\n    # -----------------------------\n    # LOAD DATA\n    # -----------------------------\n\
+        \    data = np.load(data_input, allow_pickle=True)\n\n    X_test  = data[\"\
+        X_test\"]\n    y_test  = data[\"y_test\"]\n    horizon = int(data[\"horizon\"\
+        ])\n    FEATURES = data[\"feature_names\"]\n\n    # -----------------------------\n\
+        \    # LOAD MODEL\n    # -----------------------------\n    model_files =\
+        \ os.listdir(model_input)\n    model_path  = os.path.join(model_input, model_files[0])\n\
+        \    model       = tf.keras.models.load_model(model_path, compile=False)\n\
+        \n    # -----------------------------\n    # DETECT MODEL NAME           \n\
+        \    # -----------------------------\n    def detect_model_name(path):\n \
+        \       p = path.lower()\n        if \"cnn-lstm\" in p:\n            return\
+        \ \"CNN-LSTM\"\n        elif \"cnn\" in p:\n            return \"CNN\"\n \
+        \       elif \"fnn\" in p:\n            return \"FNN\"\n\n    model_name =\
+        \ detect_model_name(model_path)\n    print(f\"Mod\xE8le d\xE9tect\xE9 : {model_name}\"\
+        )\n\n    # -----------------------------\n    # PREDICTION\n    # -----------------------------\n\
+        \    y_pred = model.predict(X_test)\n\n    # -----------------------------\n\
+        \    # LOAD SCALER\n    # -----------------------------\n    scaler_bytes\
+        \ = data[\"scaler\"].item()\n\n    tmp_scaler = tempfile.mktemp(suffix=\"\
+        .save\")\n    with open(tmp_scaler, \"wb\") as f:\n        f.write(scaler_bytes)\n\
+        \n    scaler = joblib.load(tmp_scaler)\n    os.remove(tmp_scaler)\n\n    #\
+        \ -----------------------------\n    # INVERSE TRANSFORM\n    # -----------------------------\n\
+        \    y_test_unscaled = scaler.inverse_transform(y_test)\n    y_pred_unscaled\
+        \ = scaler.inverse_transform(y_pred)\n\n    # -----------------------------\n\
+        \    # FEATURE TYPES\n    # -----------------------------\n    feature_types\
+        \ = {}\n    for f in FEATURES:\n        if \"Jitter\" in f:\n            feature_types[f]\
+        \ = \"jitter\"\n        elif \"CQI\" in f:\n            feature_types[f] =\
+        \ \"cqi\"\n        else:\n            feature_types[f] = \"throughput\"\n\n\
+        \    # -----------------------------\n    # METRICS FUNCTIONS\n    # -----------------------------\n\
+        \    def calculate_metrics(y_true, y_pred):\n        rmse = np.sqrt(mean_squared_error(y_true,\
+        \ y_pred))\n        mae  = mean_absolute_error(y_true, y_pred)\n        r2\
+        \   = r2_score(y_true, y_pred)\n        return {\n            \"rmse\": float(rmse),\n\
+        \            \"mae\":  float(mae),\n            \"r2\":   float(r2),\n   \
+        \     }\n\n    # -----------------------------\n    # METRICS PER FEATURE\n\
+        \    # -----------------------------\n    all_metrics = {}\n\n    print(\"\
+        \\n\" + \"=\" * 80)\n    print(\"M\xC9TRIQUES PAR FEATURE\")\n    print(\"\
+        =\" * 80)\n    print(f\"{'Feature':<20} {'RMSE':<10} {'MAE':<10} {'R2':<8}\"\
+        )\n    print(\"-\" * 70)\n\n    for i, feature in enumerate(FEATURES):\n \
+        \       if i >= y_test_unscaled.shape[1]:\n            break\n\n        y_true_f\
+        \ = y_test_unscaled[:, i]\n        y_pred_f = y_pred_unscaled[:, i]\n\n  \
+        \      metrics = calculate_metrics(y_true_f, y_pred_f)\n        all_metrics[feature]\
+        \ = metrics\n\n        print(\n            f\"{feature:<20} \"\n         \
+        \   f\"{metrics['rmse']:<10.4f} \"\n            f\"{metrics['mae']:<10.4f}\
+        \ \"\n            f\"{metrics['r2']:<8.4f}\"\n        )\n\n    # -----------------------------\n\
+        \    # SAVE METRICS\n    # -----------------------------\n    with open(test_metrics,\
+        \ \"w\") as f:\n        json.dump({\n            \"model_name\": model_name,\n\
+        \            \"horizon\":    horizon,\n            \"features\":   all_metrics\n\
+        \        }, f, indent=2)\n\n    # -----------------------------\n    # PLOT\
+        \ FUNCTION\n    # -----------------------------\n    def plot_feature(actual,\
+        \ predicted, feature_name, metrics, horizon):\n        fig, ax = plt.subplots(figsize=(10,\
+        \ 4))\n\n        steps = min(200, len(actual))\n        t     = range(steps)\n\
+        \n        ax.plot(t, actual[:steps],    label=\"Actual\",    linewidth=1.5)\n\
+        \        ax.plot(t, predicted[:steps], label=\"Predicted\", linestyle=\"--\"\
+        , linewidth=1.5)\n\n        if \"web\" in feature_name or \"sipp\" in feature_name:\n\
+        \            ylabel = \"Throughput (Kbps)\"\n        elif \"Jitter\" in feature_name:\n\
+        \            ylabel = \"Jitter (ms)\"\n        elif \"CQI\" in feature_name:\n\
+        \            ylabel = \"CQI\"\n        else:\n            ylabel = \"Value\"\
+        \n\n        ax.set_xlabel(\"Time Slots\")\n        ax.set_ylabel(ylabel)\n\
+        \        ax.set_title(\n            f\"[{model_name}] {feature_name}\\n\"\
+        \   \n            f\"MAE={metrics['mae']:.3f}\"\n        )\n        ax.legend()\n\
+        \        ax.grid(True, alpha=0.3)\n        plt.tight_layout()\n\n        safe\
+        \ = feature_name.replace(\":\", \"\").replace(\" \", \"_\")\n        plt.savefig(os.path.join(plot_output,\
+        \ f\"{model_name}_h{horizon}_{safe}.pdf\"))  \n        plt.close()\n\n   \
+        \ # -----------------------------\n    # CREATE PLOTS\n    # -----------------------------\n\
+        \    os.makedirs(plot_output, exist_ok=True)\n\n    for i, feature in enumerate(FEATURES):\n\
+        \        if i < y_test_unscaled.shape[1]:\n            plot_feature(\n   \
+        \             y_test_unscaled[:, i],\n                y_pred_unscaled[:, i],\n\
+        \                feature,\n                all_metrics[feature],\n       \
+        \         horizon\n            )\n\n    # -----------------------------\n\
+        \    # SAVE PREDICTIONS\n    # -----------------------------\n    with open(output_data,\
+        \ \"wb\") as f:\n        np.savez_compressed(\n            f,\n          \
+        \  y_pred=y_pred_unscaled,\n            y_true=y_test_unscaled,\n        \
+        \    feature_names=FEATURES\n        )\n\n    print(f\"\\n\u2714 {len(FEATURES)}\
+        \ features \xE9valu\xE9es\")\n    print(\"=== Fin \xE9valuation ===\")\n\n\
+        import argparse\n_parser = argparse.ArgumentParser(prog='Evaluate', description='')\n\
+        _parser.add_argument(\"--data-input\", dest=\"data_input\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-input\", dest=\"\
+        model_input\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --output-data\", dest=\"output_data\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\"\
+        , dest=\"plot_output\", type=_make_parent_dirs_and_return_path, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-metrics\", dest=\"\
+        test_metrics\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
+        _parsed_args = vars(_parser.parse_args())\n\n_outputs = evaluate(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: preprocess-output, path: /tmp/inputs/data_input/data}
+      - {name: train-cnn-lstm-category-model_output, path: /tmp/inputs/model_input/data}
+    outputs:
+      artifacts:
+      - {name: evaluate-3-output_data, path: /tmp/outputs/output_data/data}
+      - {name: evaluate-3-plot_output, path: /tmp/outputs/plot_output/data}
+      - {name: evaluate-3-test_metrics, path: /tmp/outputs/test_metrics/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "false"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--data-input", {"inputPath": "data_input"}, "--model-input",
+          {"inputPath": "model_input"}, "--output-data", {"outputPath": "output_data"},
+          "--plot-output", {"outputPath": "plot_output"}, "--test-metrics", {"outputPath":
+          "test_metrics"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n    os.makedirs(os.path.dirname(file_path),
+          exist_ok=True)\n    return file_path\n\ndef evaluate(\n    data_input,\n    model_input,\n    output_data,\n    plot_output,\n    test_metrics\n):\n    import
+          os\n    import json\n    import numpy as np\n    import tensorflow as tf\n    import
+          matplotlib\n    matplotlib.use(\"Agg\")\n    import matplotlib.pyplot as
+          plt\n    import joblib\n    import tempfile\n\n    from sklearn.metrics
+          import mean_squared_error, mean_absolute_error, r2_score\n\n    print(\"===
+          D\u00e9but \u00e9valuation ===\")\n\n    # -----------------------------\n    #
+          LOAD DATA\n    # -----------------------------\n    data = np.load(data_input,
+          allow_pickle=True)\n\n    X_test  = data[\"X_test\"]\n    y_test  = data[\"y_test\"]\n    horizon
+          = int(data[\"horizon\"])\n    FEATURES = data[\"feature_names\"]\n\n    #
+          -----------------------------\n    # LOAD MODEL\n    # -----------------------------\n    model_files
+          = os.listdir(model_input)\n    model_path  = os.path.join(model_input, model_files[0])\n    model       =
+          tf.keras.models.load_model(model_path, compile=False)\n\n    # -----------------------------\n    #
+          DETECT MODEL NAME           \n    # -----------------------------\n    def
+          detect_model_name(path):\n        p = path.lower()\n        if \"cnn-lstm\"
+          in p:\n            return \"CNN-LSTM\"\n        elif \"cnn\" in p:\n            return
+          \"CNN\"\n        elif \"fnn\" in p:\n            return \"FNN\"\n\n    model_name
+          = detect_model_name(model_path)\n    print(f\"Mod\u00e8le d\u00e9tect\u00e9
+          : {model_name}\")\n\n    # -----------------------------\n    # PREDICTION\n    #
+          -----------------------------\n    y_pred = model.predict(X_test)\n\n    #
+          -----------------------------\n    # LOAD SCALER\n    # -----------------------------\n    scaler_bytes
+          = data[\"scaler\"].item()\n\n    tmp_scaler = tempfile.mktemp(suffix=\".save\")\n    with
+          open(tmp_scaler, \"wb\") as f:\n        f.write(scaler_bytes)\n\n    scaler
+          = joblib.load(tmp_scaler)\n    os.remove(tmp_scaler)\n\n    # -----------------------------\n    #
+          INVERSE TRANSFORM\n    # -----------------------------\n    y_test_unscaled
+          = scaler.inverse_transform(y_test)\n    y_pred_unscaled = scaler.inverse_transform(y_pred)\n\n    #
+          -----------------------------\n    # FEATURE TYPES\n    # -----------------------------\n    feature_types
+          = {}\n    for f in FEATURES:\n        if \"Jitter\" in f:\n            feature_types[f]
+          = \"jitter\"\n        elif \"CQI\" in f:\n            feature_types[f] =
+          \"cqi\"\n        else:\n            feature_types[f] = \"throughput\"\n\n    #
+          -----------------------------\n    # METRICS FUNCTIONS\n    # -----------------------------\n    def
+          calculate_metrics(y_true, y_pred):\n        rmse = np.sqrt(mean_squared_error(y_true,
+          y_pred))\n        mae  = mean_absolute_error(y_true, y_pred)\n        r2   =
+          r2_score(y_true, y_pred)\n        return {\n            \"rmse\": float(rmse),\n            \"mae\":  float(mae),\n            \"r2\":   float(r2),\n        }\n\n    #
+          -----------------------------\n    # METRICS PER FEATURE\n    # -----------------------------\n    all_metrics
+          = {}\n\n    print(\"\\n\" + \"=\" * 80)\n    print(\"M\u00c9TRIQUES PAR
+          FEATURE\")\n    print(\"=\" * 80)\n    print(f\"{''Feature'':<20} {''RMSE'':<10}
+          {''MAE'':<10} {''R2'':<8}\")\n    print(\"-\" * 70)\n\n    for i, feature
+          in enumerate(FEATURES):\n        if i >= y_test_unscaled.shape[1]:\n            break\n\n        y_true_f
+          = y_test_unscaled[:, i]\n        y_pred_f = y_pred_unscaled[:, i]\n\n        metrics
+          = calculate_metrics(y_true_f, y_pred_f)\n        all_metrics[feature] =
+          metrics\n\n        print(\n            f\"{feature:<20} \"\n            f\"{metrics[''rmse'']:<10.4f}
+          \"\n            f\"{metrics[''mae'']:<10.4f} \"\n            f\"{metrics[''r2'']:<8.4f}\"\n        )\n\n    #
+          -----------------------------\n    # SAVE METRICS\n    # -----------------------------\n    with
+          open(test_metrics, \"w\") as f:\n        json.dump({\n            \"model_name\":
+          model_name,\n            \"horizon\":    horizon,\n            \"features\":   all_metrics\n        },
+          f, indent=2)\n\n    # -----------------------------\n    # PLOT FUNCTION\n    #
+          -----------------------------\n    def plot_feature(actual, predicted, feature_name,
+          metrics, horizon):\n        fig, ax = plt.subplots(figsize=(10, 4))\n\n        steps
+          = min(200, len(actual))\n        t     = range(steps)\n\n        ax.plot(t,
+          actual[:steps],    label=\"Actual\",    linewidth=1.5)\n        ax.plot(t,
+          predicted[:steps], label=\"Predicted\", linestyle=\"--\", linewidth=1.5)\n\n        if
+          \"web\" in feature_name or \"sipp\" in feature_name:\n            ylabel
+          = \"Throughput (Kbps)\"\n        elif \"Jitter\" in feature_name:\n            ylabel
+          = \"Jitter (ms)\"\n        elif \"CQI\" in feature_name:\n            ylabel
+          = \"CQI\"\n        else:\n            ylabel = \"Value\"\n\n        ax.set_xlabel(\"Time
+          Slots\")\n        ax.set_ylabel(ylabel)\n        ax.set_title(\n            f\"[{model_name}]
+          {feature_name}\\n\"   \n            f\"MAE={metrics[''mae'']:.3f}\"\n        )\n        ax.legend()\n        ax.grid(True,
+          alpha=0.3)\n        plt.tight_layout()\n\n        safe = feature_name.replace(\":\",
+          \"\").replace(\" \", \"_\")\n        plt.savefig(os.path.join(plot_output,
+          f\"{model_name}_h{horizon}_{safe}.pdf\"))  \n        plt.close()\n\n    #
+          -----------------------------\n    # CREATE PLOTS\n    # -----------------------------\n    os.makedirs(plot_output,
+          exist_ok=True)\n\n    for i, feature in enumerate(FEATURES):\n        if
+          i < y_test_unscaled.shape[1]:\n            plot_feature(\n                y_test_unscaled[:,
+          i],\n                y_pred_unscaled[:, i],\n                feature,\n                all_metrics[feature],\n                horizon\n            )\n\n    #
+          -----------------------------\n    # SAVE PREDICTIONS\n    # -----------------------------\n    with
+          open(output_data, \"wb\") as f:\n        np.savez_compressed(\n            f,\n            y_pred=y_pred_unscaled,\n            y_true=y_test_unscaled,\n            feature_names=FEATURES\n        )\n\n    print(f\"\\n\u2714
+          {len(FEATURES)} features \u00e9valu\u00e9es\")\n    print(\"=== Fin \u00e9valuation
+          ===\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Evaluate'',
+          description='''')\n_parser.add_argument(\"--data-input\", dest=\"data_input\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-input\",
+          dest=\"model_input\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--output-data\",
+          dest=\"output_data\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\", dest=\"plot_output\",
+          type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-metrics\",
+          dest=\"test_metrics\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = evaluate(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "data_input", "type": "String"}, {"name": "model_input",
+          "type": "String"}], "name": "Evaluate", "outputs": [{"name": "output_data",
+          "type": "String"}, {"name": "plot_output", "type": "String"}, {"name": "test_metrics",
+          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}'}
+  - name: load-minio-data
+    container:
+      args: [--bucket, '{{inputs.parameters.bucket}}', --object-name, data/ue-lte-network-traffic-stats.csv,
+        --output, /tmp/outputs/output/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef load_minio_data(bucket, object_name, output):\n    from minio import\
+        \ Minio\n    client = Minio(\n        \"minio-service.kubeflow.svc.cluster.local:9000\"\
+        ,\n        access_key=\"minio\",\n        secret_key=\"minio123\",\n     \
+        \   secure=False\n    )\n\n    client.fget_object(bucket, object_name, output)\n\
+        \    print(f\"Fichier {object_name} t\xE9l\xE9charg\xE9 avec succ\xE8s.\"\
+        )\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Load minio data',\
+        \ description='')\n_parser.add_argument(\"--bucket\", dest=\"bucket\", type=str,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--object-name\"\
+        , dest=\"object_name\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--output\", dest=\"output\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\
+        \n_outputs = load_minio_data(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      parameters:
+      - {name: bucket}
+    outputs:
+      artifacts:
+      - {name: load-minio-data-output, path: /tmp/outputs/output/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--bucket", {"inputValue": "bucket"}, "--object-name", {"inputValue":
+          "object_name"}, "--output", {"outputPath": "output"}], "command": ["sh",
+          "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def _make_parent_dirs_and_return_path(file_path:
+          str):\n    import os\n    os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return
+          file_path\n\ndef load_minio_data(bucket, object_name, output):\n    from
+          minio import Minio\n    client = Minio(\n        \"minio-service.kubeflow.svc.cluster.local:9000\",\n        access_key=\"minio\",\n        secret_key=\"minio123\",\n        secure=False\n    )\n\n    client.fget_object(bucket,
+          object_name, output)\n    print(f\"Fichier {object_name} t\u00e9l\u00e9charg\u00e9
+          avec succ\u00e8s.\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Load
+          minio data'', description='''')\n_parser.add_argument(\"--bucket\", dest=\"bucket\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--object-name\",
+          dest=\"object_name\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--output\",
+          dest=\"output\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = load_minio_data(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "bucket", "type": "String"}, {"name": "object_name",
+          "type": "String"}], "name": "Load minio data", "outputs": [{"name": "output",
+          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}', pipelines.kubeflow.org/arguments.parameters: '{"bucket":
+          "{{inputs.parameters.bucket}}", "object_name": "data/ue-lte-network-traffic-stats.csv"}'}
+  - name: mlops-pipeline
+    inputs:
+      parameters:
+      - {name: bucket}
+    dag:
+      tasks:
+      - name: evaluate
+        template: evaluate
+        dependencies: [preprocess, train-fnn-category]
+        arguments:
+          artifacts:
+          - {name: preprocess-output, from: '{{tasks.preprocess.outputs.artifacts.preprocess-output}}'}
+          - {name: train-fnn-category-model_output, from: '{{tasks.train-fnn-category.outputs.artifacts.train-fnn-category-model_output}}'}
+      - name: evaluate-2
+        template: evaluate-2
+        dependencies: [preprocess, train-cnn-category]
+        arguments:
+          artifacts:
+          - {name: preprocess-output, from: '{{tasks.preprocess.outputs.artifacts.preprocess-output}}'}
+          - {name: train-cnn-category-model_output, from: '{{tasks.train-cnn-category.outputs.artifacts.train-cnn-category-model_output}}'}
+      - name: evaluate-3
+        template: evaluate-3
+        dependencies: [preprocess, train-cnn-lstm-category]
+        arguments:
+          artifacts:
+          - {name: preprocess-output, from: '{{tasks.preprocess.outputs.artifacts.preprocess-output}}'}
+          - {name: train-cnn-lstm-category-model_output, from: '{{tasks.train-cnn-lstm-category.outputs.artifacts.train-cnn-lstm-category-model_output}}'}
+      - name: load-minio-data
+        template: load-minio-data
+        arguments:
+          parameters:
+          - {name: bucket, value: '{{inputs.parameters.bucket}}'}
+      - name: preprocess
+        template: preprocess
+        dependencies: [load-minio-data]
+        arguments:
+          artifacts:
+          - {name: load-minio-data-output, from: '{{tasks.load-minio-data.outputs.artifacts.load-minio-data-output}}'}
+      - name: save-best-model
+        template: save-best-model
+        dependencies: [select-best-model, train-cnn-category, train-cnn-lstm-category,
+          train-fnn-category]
+        arguments:
+          artifacts:
+          - {name: select-best-model-selection_result, from: '{{tasks.select-best-model.outputs.artifacts.select-best-model-selection_result}}'}
+          - {name: train-cnn-category-model_output, from: '{{tasks.train-cnn-category.outputs.artifacts.train-cnn-category-model_output}}'}
+          - {name: train-cnn-lstm-category-model_output, from: '{{tasks.train-cnn-lstm-category.outputs.artifacts.train-cnn-lstm-category-model_output}}'}
+          - {name: train-fnn-category-model_output, from: '{{tasks.train-fnn-category.outputs.artifacts.train-fnn-category-model_output}}'}
+      - name: select-best-model
+        template: select-best-model
+        dependencies: [evaluate, evaluate-2, evaluate-3]
+        arguments:
+          artifacts:
+          - {name: evaluate-2-test_metrics, from: '{{tasks.evaluate-2.outputs.artifacts.evaluate-2-test_metrics}}'}
+          - {name: evaluate-3-test_metrics, from: '{{tasks.evaluate-3.outputs.artifacts.evaluate-3-test_metrics}}'}
+          - {name: evaluate-test_metrics, from: '{{tasks.evaluate.outputs.artifacts.evaluate-test_metrics}}'}
+      - name: train-cnn-category
+        template: train-cnn-category
+        dependencies: [preprocess]
+        arguments:
+          artifacts:
+          - {name: preprocess-output, from: '{{tasks.preprocess.outputs.artifacts.preprocess-output}}'}
+      - name: train-cnn-lstm-category
+        template: train-cnn-lstm-category
+        dependencies: [preprocess]
+        arguments:
+          artifacts:
+          - {name: preprocess-output, from: '{{tasks.preprocess.outputs.artifacts.preprocess-output}}'}
+      - name: train-fnn-category
+        template: train-fnn-category
+        dependencies: [preprocess]
+        arguments:
+          artifacts:
+          - {name: preprocess-output, from: '{{tasks.preprocess.outputs.artifacts.preprocess-output}}'}
+  - name: preprocess
+    container:
+      args: [--input-csv, /tmp/inputs/input_csv/data, --output, /tmp/outputs/output/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef preprocess(\n    input_csv,\n    output\n):\n    import pandas as pd\n\
+        \    import numpy as np\n    from sklearn.preprocessing import MinMaxScaler\n\
+        \    import joblib\n    import tempfile\n    import re\n\n    print(\"D\xE9\
+        but du pr\xE9traitement...\")\n\n    ts_df = pd.read_csv(input_csv)\n\n  \
+        \  window_size = 30\n    horizon = 5\n\n    KPIS = [\"web-rtc\", \"sipp\"\
+        , \"web-server\", \"Jitter\", \"CQI\"]\n\n    features = [\n        col for\
+        \ col in ts_df.columns\n        if any(kpi in col for kpi in KPIS)\n    ]\n\
+        \n    def sort_features(features):\n        def extract(col):\n          \
+        \  user_match = re.search(r\"UE(\\d+)\", col)\n            user_id = int(user_match.group(1))\
+        \ if user_match else 9999\n            kpi_index = next((i for i, k in enumerate(KPIS)\
+        \ if k in col), 999)\n            return (user_id, kpi_index)\n\n        return\
+        \ sorted(features, key=extract)\n\n    features = sort_features(features)\n\
+        \n    if len(features) == 0:\n        raise ValueError(\"Aucune feature valide\
+        \ trouv\xE9e\")\n\n    # --- SPLIT ---\n    total_rows = len(ts_df)\n    train_cutoff\
+        \ = int(total_rows * 0.7)\n    val_cutoff = train_cutoff + int(total_rows\
+        \ * 0.15)\n\n    train_df = ts_df.iloc[:train_cutoff]\n    val_df = ts_df.iloc[train_cutoff:val_cutoff]\n\
+        \    test_df = ts_df.iloc[val_cutoff:]\n\n    # --- SCALER ---\n    scaler\
+        \ = MinMaxScaler()\n\n    train_scaled = scaler.fit_transform(train_df[features].fillna(0))\n\
+        \    val_scaled = scaler.transform(val_df[features].fillna(0))\n    test_scaled\
+        \ = scaler.transform(test_df[features].fillna(0))\n\n    # --- CONTEXT ---\n\
+        \    val_scaled = np.vstack((train_scaled[-window_size:], val_scaled))\n \
+        \   test_scaled = np.vstack((val_scaled[-window_size:], test_scaled))\n\n\
+        \    def create_sliding_window(data, window_size=30, horizon=1):\n       \
+        \ X, y = [], []\n        for i in range(len(data) - window_size - horizon\
+        \ + 1):\n            X.append(data[i:i + window_size])\n            future\
+        \ = data[i + window_size:i + window_size + horizon]\n            y.append(np.mean(future,\
+        \ axis=0))\n        return np.array(X), np.array(y)\n\n    X_train, y_train\
+        \ = create_sliding_window(train_scaled, window_size, horizon)\n    X_val,\
+        \ y_val = create_sliding_window(val_scaled, window_size, horizon)\n    X_test,\
+        \ y_test = create_sliding_window(test_scaled, window_size, horizon)\n\n  \
+        \  # --- SCALER SAVE ---\n    tmp_scaler = tempfile.mktemp(suffix=\".save\"\
+        )\n    joblib.dump(scaler, tmp_scaler)\n\n    with open(tmp_scaler, \"rb\"\
+        ) as f:\n        scaler_bytes = f.read()\n\n    # --- SAVE ALL ---\n    with\
+        \ open(output, \"wb\") as f:\n        np.savez_compressed(\n            f,\n\
+        \            X_train=X_train,\n            y_train=y_train,\n            X_val=X_val,\n\
+        \            y_val=y_val,\n            X_test=X_test,\n            y_test=y_test,\n\
+        \            horizon=horizon,\n            scaler=scaler_bytes,\n        \
+        \    feature_names=np.array(features)\n        )\n\n    print(\"Pr\xE9traitement\
+        \ termin\xE9\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Preprocess',\
+        \ description='')\n_parser.add_argument(\"--input-csv\", dest=\"input_csv\"\
+        , type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --output\", dest=\"output\", type=_make_parent_dirs_and_return_path, required=True,\
+        \ default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n\
+        _outputs = preprocess(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: load-minio-data-output, path: /tmp/inputs/input_csv/data}
+    outputs:
+      artifacts:
+      - {name: preprocess-output, path: /tmp/outputs/output/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--input-csv", {"inputPath": "input_csv"}, "--output", {"outputPath":
+          "output"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf \"%s\"
+          \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n", "def
+          _make_parent_dirs_and_return_path(file_path: str):\n    import os\n    os.makedirs(os.path.dirname(file_path),
+          exist_ok=True)\n    return file_path\n\ndef preprocess(\n    input_csv,\n    output\n):\n    import
+          pandas as pd\n    import numpy as np\n    from sklearn.preprocessing import
+          MinMaxScaler\n    import joblib\n    import tempfile\n    import re\n\n    print(\"D\u00e9but
+          du pr\u00e9traitement...\")\n\n    ts_df = pd.read_csv(input_csv)\n\n    window_size
+          = 30\n    horizon = 5\n\n    KPIS = [\"web-rtc\", \"sipp\", \"web-server\",
+          \"Jitter\", \"CQI\"]\n\n    features = [\n        col for col in ts_df.columns\n        if
+          any(kpi in col for kpi in KPIS)\n    ]\n\n    def sort_features(features):\n        def
+          extract(col):\n            user_match = re.search(r\"UE(\\d+)\", col)\n            user_id
+          = int(user_match.group(1)) if user_match else 9999\n            kpi_index
+          = next((i for i, k in enumerate(KPIS) if k in col), 999)\n            return
+          (user_id, kpi_index)\n\n        return sorted(features, key=extract)\n\n    features
+          = sort_features(features)\n\n    if len(features) == 0:\n        raise ValueError(\"Aucune
+          feature valide trouv\u00e9e\")\n\n    # --- SPLIT ---\n    total_rows =
+          len(ts_df)\n    train_cutoff = int(total_rows * 0.7)\n    val_cutoff = train_cutoff
+          + int(total_rows * 0.15)\n\n    train_df = ts_df.iloc[:train_cutoff]\n    val_df
+          = ts_df.iloc[train_cutoff:val_cutoff]\n    test_df = ts_df.iloc[val_cutoff:]\n\n    #
+          --- SCALER ---\n    scaler = MinMaxScaler()\n\n    train_scaled = scaler.fit_transform(train_df[features].fillna(0))\n    val_scaled
+          = scaler.transform(val_df[features].fillna(0))\n    test_scaled = scaler.transform(test_df[features].fillna(0))\n\n    #
+          --- CONTEXT ---\n    val_scaled = np.vstack((train_scaled[-window_size:],
+          val_scaled))\n    test_scaled = np.vstack((val_scaled[-window_size:], test_scaled))\n\n    def
+          create_sliding_window(data, window_size=30, horizon=1):\n        X, y =
+          [], []\n        for i in range(len(data) - window_size - horizon + 1):\n            X.append(data[i:i
+          + window_size])\n            future = data[i + window_size:i + window_size
+          + horizon]\n            y.append(np.mean(future, axis=0))\n        return
+          np.array(X), np.array(y)\n\n    X_train, y_train = create_sliding_window(train_scaled,
+          window_size, horizon)\n    X_val, y_val = create_sliding_window(val_scaled,
+          window_size, horizon)\n    X_test, y_test = create_sliding_window(test_scaled,
+          window_size, horizon)\n\n    # --- SCALER SAVE ---\n    tmp_scaler = tempfile.mktemp(suffix=\".save\")\n    joblib.dump(scaler,
+          tmp_scaler)\n\n    with open(tmp_scaler, \"rb\") as f:\n        scaler_bytes
+          = f.read()\n\n    # --- SAVE ALL ---\n    with open(output, \"wb\") as f:\n        np.savez_compressed(\n            f,\n            X_train=X_train,\n            y_train=y_train,\n            X_val=X_val,\n            y_val=y_val,\n            X_test=X_test,\n            y_test=y_test,\n            horizon=horizon,\n            scaler=scaler_bytes,\n            feature_names=np.array(features)\n        )\n\n    print(\"Pr\u00e9traitement
+          termin\u00e9\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Preprocess'',
+          description='''')\n_parser.add_argument(\"--input-csv\", dest=\"input_csv\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--output\",
+          dest=\"output\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = preprocess(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "input_csv", "type": "String"}], "name": "Preprocess",
+          "outputs": [{"name": "output", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}'}
+  - name: save-best-model
+    container:
+      args: [--selection-result, /tmp/inputs/selection_result/data, --cnn-model, /tmp/inputs/cnn_model/data,
+        --fnn-model, /tmp/inputs/fnn_model/data, --cnn-lstm-model, /tmp/inputs/cnn_lstm_model/data,
+        --bucket, models, --model-registry, /tmp/outputs/model_registry/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef save_best_model(\n    selection_result,\n    cnn_model,\n    fnn_model,\n\
+        \    cnn_lstm_model,         \n    model_registry,\n    bucket = \"models\"\
+        \n):\n    import json\n    import os\n    import tempfile\n    from minio\
+        \ import Minio\n    from datetime import datetime\n\n    print(\"=\"*80)\n\
+        \    print(\"SAUVEGARDE DU MEILLEUR MOD\xC8LE DANS MINIO\")\n    print(\"\
+        =\"*80)\n\n    # -----------------------------\n    # LOAD SELECTION\n   \
+        \ # -----------------------------\n    with open(selection_result, 'r') as\
+        \ f:\n        selection = json.load(f)\n\n    best_model = selection['best_model']\n\
+        \n    print(f\"\\n Meilleur mod\xE8le: {best_model}\")\n    print(f\"   {selection['reasoning']}\"\
+        )\n    print(f\"   R\xB2 moyen: {selection['avg_r2'][best_model]:.4f}\")\n\
+        \    print(\n        f\"   Victoires R\xB2: \"\n        f\"CNN={selection['feature_wins']['CNN']},\
+        \ \"\n        f\"FNN={selection['feature_wins']['FNN']}, \"\n        f\"CNN-LSTM={selection['feature_wins']['CNN-LSTM']}\"\
+        \    \n    )\n\n    # -----------------------------\n    # MINIO\n    # -----------------------------\n\
+        \    client = Minio(\n        \"minio-service.kubeflow.svc.cluster.local:9000\"\
+        ,\n        access_key=\"minio\",\n        secret_key=\"minio123\",\n     \
+        \   secure=False\n    )\n\n    if not client.bucket_exists(bucket):\n    \
+        \    client.make_bucket(bucket)\n        print(f\"\\n Bucket cr\xE9\xE9: {bucket}\"\
+        )\n\n    # -----------------------------\n    # SELECT MODEL             \
+        \   \n    # -----------------------------\n    if best_model == \"CNN-LSTM\"\
+        :\n        model_dir     = cnn_lstm_model\n        model_type    = \"CNN-LSTM\"\
+        \n        features_perf = selection['cnn_lstm_features']\n    elif best_model\
+        \ == \"CNN\":\n        model_dir     = cnn_model\n        model_type    =\
+        \ \"CNN\"\n        features_perf = selection['cnn_features']\n    else:  #\
+        \ FNN\n        model_dir     = fnn_model\n        model_type    = \"FNN\"\n\
+        \        features_perf = selection['fnn_features']\n\n    # -----------------------------\n\
+        \    # FIND MODEL FILE\n    # -----------------------------\n    model_files\
+        \ = [f for f in os.listdir(model_dir) if f.endswith('.keras')]\n\n    if not\
+        \ model_files:\n        raise ValueError(f\"Aucun mod\xE8le trouv\xE9 dans\
+        \ {model_dir}\")\n\n    local_model_path = os.path.join(model_dir, model_files[0])\n\
+        \n    # -----------------------------\n    # NAMING\n    # -----------------------------\n\
+        \    timestamp  = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n    avg_r2 \
+        \    = selection['avg_r2'][best_model]\n    r2_percent = int(avg_r2 * 100)\n\
+        \n    safe_type        = model_type.replace(\"-\", \"_\")             \n \
+        \   model_filename   = f\"{safe_type}_model_r2{r2_percent}_{timestamp}.keras\"\
+        \n    metrics_filename = f\"{safe_type}_metrics_r2{r2_percent}_{timestamp}.json\"\
+        \n\n    # -----------------------------\n    # UPLOAD MODEL\n    # -----------------------------\n\
+        \    remote_model_path = f\"best_models/{model_filename}\"\n    client.fput_object(bucket,\
+        \ remote_model_path, local_model_path)\n    print(f\"\\n Mod\xE8le upload\xE9\
+        : {bucket}/{remote_model_path}\")\n\n    # -----------------------------\n\
+        \    # SAVE METRICS\n    # -----------------------------\n    metrics_to_save\
+        \ = {\n        'best_model':        best_model,\n        'selection_criteria':\
+        \ 'R2',\n        'saved_at':          datetime.now().isoformat(),\n      \
+        \  'avg_r2':            avg_r2,\n        'feature_wins':      selection['feature_wins'],\n\
+        \        'total_features':    selection['total_features'],\n        'features_performance':\
+        \ {\n            feature: {\n                'r2':       features_perf[feature]['r2'],\n\
+        \                'accuracy': features_perf[feature].get('accuracy', 0),\n\
+        \                'rmse':     features_perf[feature].get('rmse', 0),\n    \
+        \            'mae':      features_perf[feature].get('mae', 0)\n          \
+        \  }\n            for feature in features_perf\n        }\n    }\n\n    with\
+        \ tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:\n\
+        \        json.dump(metrics_to_save, tmp, indent=2)\n        tmp_metrics_path\
+        \ = tmp.name\n\n    remote_metrics_path = f\"best_models/{metrics_filename}\"\
+        \n    client.fput_object(bucket, remote_metrics_path, tmp_metrics_path)\n\
+        \    os.unlink(tmp_metrics_path)\n    print(f\" M\xE9triques upload\xE9es:\
+        \ {bucket}/{remote_metrics_path}\")\n\n    # -----------------------------\n\
+        \    # LATEST COPY\n    # -----------------------------\n    latest_model\
+        \   = f\"latest/{safe_type}_latest.keras\"        \n    latest_metrics = f\"\
+        latest/{safe_type}_latest.json\"\n\n    client.fput_object(bucket, latest_model,\
+        \ local_model_path)\n\n    with tempfile.NamedTemporaryFile(mode='w', suffix='.json',\
+        \ delete=False) as tmp:\n        json.dump(metrics_to_save, tmp, indent=2)\n\
+        \        tmp_metrics_path = tmp.name\n\n    client.fput_object(bucket, latest_metrics,\
+        \ tmp_metrics_path)\n    os.unlink(tmp_metrics_path)\n    print(f\" Copie\
+        \ latest: {bucket}/{latest_model}\")\n\n    # -----------------------------\n\
+        \    # REGISTRY\n    # -----------------------------\n    registry_info =\
+        \ {\n        'best_model':       best_model,\n        'saved_at':        \
+        \ datetime.now().isoformat(),\n        'model_location':   f\"s3://{bucket}/{remote_model_path}\"\
+        ,\n        'metrics_location': f\"s3://{bucket}/{remote_metrics_path}\",\n\
+        \        'avg_r2':           avg_r2,\n        'feature_wins':     selection['feature_wins'],\n\
+        \        'total_features':   selection['total_features']\n    }\n\n    with\
+        \ open(model_registry, 'w') as f:\n        json.dump(registry_info, f, indent=2)\n\
+        \n    print(\"\\n\" + \"=\"*80)\n    print(\" SAUVEGARDE TERMIN\xC9E\")\n\
+        \    print(f\"   Mod\xE8le:    {model_filename}\")\n    print(f\"   R\xB2\
+        \ moyen:  {avg_r2:.4f} ({r2_percent}%)\")\n    print(f\"   Victoires: {selection['feature_wins'][best_model]}/{selection['total_features']}\"\
+        )\n    print(f\"   Emplacement: s3://{bucket}/{remote_model_path}\")\n   \
+        \ print(\"=\"*80)\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Save\
+        \ best model', description='')\n_parser.add_argument(\"--selection-result\"\
+        , dest=\"selection_result\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--cnn-model\", dest=\"cnn_model\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--fnn-model\", dest=\"\
+        fnn_model\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --cnn-lstm-model\", dest=\"cnn_lstm_model\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--bucket\", dest=\"bucket\", type=str, required=False,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-registry\", dest=\"\
+        model_registry\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
+        _parsed_args = vars(_parser.parse_args())\n\n_outputs = save_best_model(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: train-cnn-lstm-category-model_output, path: /tmp/inputs/cnn_lstm_model/data}
+      - {name: train-cnn-category-model_output, path: /tmp/inputs/cnn_model/data}
+      - {name: train-fnn-category-model_output, path: /tmp/inputs/fnn_model/data}
+      - {name: select-best-model-selection_result, path: /tmp/inputs/selection_result/data}
+    outputs:
+      artifacts:
+      - {name: save-best-model-model_registry, path: /tmp/outputs/model_registry/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "false"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--selection-result", {"inputPath": "selection_result"}, "--cnn-model",
+          {"inputPath": "cnn_model"}, "--fnn-model", {"inputPath": "fnn_model"}, "--cnn-lstm-model",
+          {"inputPath": "cnn_lstm_model"}, {"if": {"cond": {"isPresent": "bucket"},
+          "then": ["--bucket", {"inputValue": "bucket"}]}}, "--model-registry", {"outputPath":
+          "model_registry"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n    os.makedirs(os.path.dirname(file_path),
+          exist_ok=True)\n    return file_path\n\ndef save_best_model(\n    selection_result,\n    cnn_model,\n    fnn_model,\n    cnn_lstm_model,         \n    model_registry,\n    bucket
+          = \"models\"\n):\n    import json\n    import os\n    import tempfile\n    from
+          minio import Minio\n    from datetime import datetime\n\n    print(\"=\"*80)\n    print(\"SAUVEGARDE
+          DU MEILLEUR MOD\u00c8LE DANS MINIO\")\n    print(\"=\"*80)\n\n    # -----------------------------\n    #
+          LOAD SELECTION\n    # -----------------------------\n    with open(selection_result,
+          ''r'') as f:\n        selection = json.load(f)\n\n    best_model = selection[''best_model'']\n\n    print(f\"\\n
+          Meilleur mod\u00e8le: {best_model}\")\n    print(f\"   {selection[''reasoning'']}\")\n    print(f\"   R\u00b2
+          moyen: {selection[''avg_r2''][best_model]:.4f}\")\n    print(\n        f\"   Victoires
+          R\u00b2: \"\n        f\"CNN={selection[''feature_wins''][''CNN'']}, \"\n        f\"FNN={selection[''feature_wins''][''FNN'']},
+          \"\n        f\"CNN-LSTM={selection[''feature_wins''][''CNN-LSTM'']}\"    \n    )\n\n    #
+          -----------------------------\n    # MINIO\n    # -----------------------------\n    client
+          = Minio(\n        \"minio-service.kubeflow.svc.cluster.local:9000\",\n        access_key=\"minio\",\n        secret_key=\"minio123\",\n        secure=False\n    )\n\n    if
+          not client.bucket_exists(bucket):\n        client.make_bucket(bucket)\n        print(f\"\\n
+          Bucket cr\u00e9\u00e9: {bucket}\")\n\n    # -----------------------------\n    #
+          SELECT MODEL                \n    # -----------------------------\n    if
+          best_model == \"CNN-LSTM\":\n        model_dir     = cnn_lstm_model\n        model_type    =
+          \"CNN-LSTM\"\n        features_perf = selection[''cnn_lstm_features'']\n    elif
+          best_model == \"CNN\":\n        model_dir     = cnn_model\n        model_type    =
+          \"CNN\"\n        features_perf = selection[''cnn_features'']\n    else:  #
+          FNN\n        model_dir     = fnn_model\n        model_type    = \"FNN\"\n        features_perf
+          = selection[''fnn_features'']\n\n    # -----------------------------\n    #
+          FIND MODEL FILE\n    # -----------------------------\n    model_files =
+          [f for f in os.listdir(model_dir) if f.endswith(''.keras'')]\n\n    if not
+          model_files:\n        raise ValueError(f\"Aucun mod\u00e8le trouv\u00e9
+          dans {model_dir}\")\n\n    local_model_path = os.path.join(model_dir, model_files[0])\n\n    #
+          -----------------------------\n    # NAMING\n    # -----------------------------\n    timestamp  =
+          datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n    avg_r2     = selection[''avg_r2''][best_model]\n    r2_percent
+          = int(avg_r2 * 100)\n\n    safe_type        = model_type.replace(\"-\",
+          \"_\")             \n    model_filename   = f\"{safe_type}_model_r2{r2_percent}_{timestamp}.keras\"\n    metrics_filename
+          = f\"{safe_type}_metrics_r2{r2_percent}_{timestamp}.json\"\n\n    # -----------------------------\n    #
+          UPLOAD MODEL\n    # -----------------------------\n    remote_model_path
+          = f\"best_models/{model_filename}\"\n    client.fput_object(bucket, remote_model_path,
+          local_model_path)\n    print(f\"\\n Mod\u00e8le upload\u00e9: {bucket}/{remote_model_path}\")\n\n    #
+          -----------------------------\n    # SAVE METRICS\n    # -----------------------------\n    metrics_to_save
+          = {\n        ''best_model'':        best_model,\n        ''selection_criteria'':
+          ''R2'',\n        ''saved_at'':          datetime.now().isoformat(),\n        ''avg_r2'':            avg_r2,\n        ''feature_wins'':      selection[''feature_wins''],\n        ''total_features'':    selection[''total_features''],\n        ''features_performance'':
+          {\n            feature: {\n                ''r2'':       features_perf[feature][''r2''],\n                ''accuracy'':
+          features_perf[feature].get(''accuracy'', 0),\n                ''rmse'':     features_perf[feature].get(''rmse'',
+          0),\n                ''mae'':      features_perf[feature].get(''mae'', 0)\n            }\n            for
+          feature in features_perf\n        }\n    }\n\n    with tempfile.NamedTemporaryFile(mode=''w'',
+          suffix=''.json'', delete=False) as tmp:\n        json.dump(metrics_to_save,
+          tmp, indent=2)\n        tmp_metrics_path = tmp.name\n\n    remote_metrics_path
+          = f\"best_models/{metrics_filename}\"\n    client.fput_object(bucket, remote_metrics_path,
+          tmp_metrics_path)\n    os.unlink(tmp_metrics_path)\n    print(f\" M\u00e9triques
+          upload\u00e9es: {bucket}/{remote_metrics_path}\")\n\n    # -----------------------------\n    #
+          LATEST COPY\n    # -----------------------------\n    latest_model   = f\"latest/{safe_type}_latest.keras\"        \n    latest_metrics
+          = f\"latest/{safe_type}_latest.json\"\n\n    client.fput_object(bucket,
+          latest_model, local_model_path)\n\n    with tempfile.NamedTemporaryFile(mode=''w'',
+          suffix=''.json'', delete=False) as tmp:\n        json.dump(metrics_to_save,
+          tmp, indent=2)\n        tmp_metrics_path = tmp.name\n\n    client.fput_object(bucket,
+          latest_metrics, tmp_metrics_path)\n    os.unlink(tmp_metrics_path)\n    print(f\"
+          Copie latest: {bucket}/{latest_model}\")\n\n    # -----------------------------\n    #
+          REGISTRY\n    # -----------------------------\n    registry_info = {\n        ''best_model'':       best_model,\n        ''saved_at'':         datetime.now().isoformat(),\n        ''model_location'':   f\"s3://{bucket}/{remote_model_path}\",\n        ''metrics_location'':
+          f\"s3://{bucket}/{remote_metrics_path}\",\n        ''avg_r2'':           avg_r2,\n        ''feature_wins'':     selection[''feature_wins''],\n        ''total_features'':   selection[''total_features'']\n    }\n\n    with
+          open(model_registry, ''w'') as f:\n        json.dump(registry_info, f, indent=2)\n\n    print(\"\\n\"
+          + \"=\"*80)\n    print(\" SAUVEGARDE TERMIN\u00c9E\")\n    print(f\"   Mod\u00e8le:    {model_filename}\")\n    print(f\"   R\u00b2
+          moyen:  {avg_r2:.4f} ({r2_percent}%)\")\n    print(f\"   Victoires: {selection[''feature_wins''][best_model]}/{selection[''total_features'']}\")\n    print(f\"   Emplacement:
+          s3://{bucket}/{remote_model_path}\")\n    print(\"=\"*80)\n\nimport argparse\n_parser
+          = argparse.ArgumentParser(prog=''Save best model'', description='''')\n_parser.add_argument(\"--selection-result\",
+          dest=\"selection_result\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--cnn-model\",
+          dest=\"cnn_model\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--fnn-model\",
+          dest=\"fnn_model\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--cnn-lstm-model\",
+          dest=\"cnn_lstm_model\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--bucket\",
+          dest=\"bucket\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-registry\",
+          dest=\"model_registry\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = save_best_model(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "selection_result", "type": "String"}, {"name": "cnn_model",
+          "type": "String"}, {"name": "fnn_model", "type": "String"}, {"name": "cnn_lstm_model",
+          "type": "String"}, {"default": "models", "name": "bucket", "optional": true,
+          "type": "String"}], "name": "Save best model", "outputs": [{"name": "model_registry",
+          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}', pipelines.kubeflow.org/arguments.parameters: '{"bucket":
+          "models"}'}
+  - name: select-best-model
+    container:
+      args: [--cnn-metrics, /tmp/inputs/cnn_metrics/data, --fnn-metrics, /tmp/inputs/fnn_metrics/data,
+        --cnn-lstm-metrics, /tmp/inputs/cnn_lstm_metrics/data, --selection-result,
+        /tmp/outputs/selection_result/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef select_best_model(\n    cnn_metrics,\n    fnn_metrics,\n    cnn_lstm_metrics,\
+        \       \n    selection_result\n):\n    import json\n    import numpy as np\n\
+        \n    print(\"=\"*80)\n    print(\"S\xC9LECTION DU MEILLEUR MOD\xC8LE - R\xB2\
+        \")\n    print(\"=\"*80)\n\n    # -----------------------------\n    # LOAD\
+        \ METRICS\n    # -----------------------------\n    with open(cnn_metrics,\
+        \ 'r') as f:\n        cnn = json.load(f)\n    with open(fnn_metrics, 'r')\
+        \ as f:\n        fnn = json.load(f)\n    with open(cnn_lstm_metrics, 'r')\
+        \ as f:          \n        cnn_lstm = json.load(f)\n\n    features = list(cnn['features'].keys())\n\
+        \    print(f\"\\nComparaison sur {len(features)} features\\n\")\n\n    # -----------------------------\n\
+        \    # STATS\n    # -----------------------------\n    feature_wins = {'CNN':\
+        \ 0, 'FNN': 0, 'CNN-LSTM': 0}       \n    feature_comparison = {}\n\n    print(f\"\
+        {'Feature':<20} {'CNN R\xB2':<12} {'FNN R\xB2':<12} {'CNN-LSTM R\xB2':<14}\
+        \ {'Diff':<10} {'Winner'}\")\n    print(\"-\"*90)\n\n    for f in features:\n\
+        \        cnn_r2      = cnn['features'][f]['r2']\n        fnn_r2      = fnn['features'][f]['r2']\n\
+        \        cnn_lstm_r2 = cnn_lstm['features'][f]['r2']            \n\n     \
+        \   best_r2 = max(cnn_r2, fnn_r2, cnn_lstm_r2)           \n\n        if best_r2\
+        \ == cnn_lstm_r2 and cnn_lstm_r2 > max(cnn_r2, fnn_r2):\n            winner\
+        \ = \"CNN-LSTM\"\n            feature_wins['CNN-LSTM'] += 1\n        elif\
+        \ cnn_r2 >= fnn_r2 and cnn_r2 >= cnn_lstm_r2:\n            if cnn_r2 == fnn_r2\
+        \ == cnn_lstm_r2:\n                winner = \"EQUAL\"\n            else:\n\
+        \                winner = \"CNN\"\n                feature_wins['CNN'] +=\
+        \ 1\n        elif fnn_r2 >= cnn_r2 and fnn_r2 >= cnn_lstm_r2:\n          \
+        \  winner = \"FNN\"\n            feature_wins['FNN'] += 1\n        else:\n\
+        \            winner = \"CNN-LSTM\"\n            feature_wins['CNN-LSTM'] +=\
+        \ 1\n\n        diff = cnn_lstm_r2 - max(cnn_r2, fnn_r2)               \n\n\
+        \        feature_comparison[f] = {\n            \"cnn_r2\":      cnn_r2,\n\
+        \            \"fnn_r2\":      fnn_r2,\n            \"cnn_lstm_r2\": cnn_lstm_r2,\n\
+        \            \"diff\":        diff,\n            \"winner\":      winner\n\
+        \        }\n\n        print(\n            f\"{f:<20} {cnn_r2:<12.4f} {fnn_r2:<12.4f}\
+        \ \"\n            f\"{cnn_lstm_r2:<14.4f} {diff:<+10.4f} {winner}\"\n    \
+        \    )\n\n    # -----------------------------\n    # AVERAGE R2\n    # -----------------------------\n\
+        \    avg_cnn      = np.mean([cnn['features'][f]['r2']      for f in features])\n\
+        \    avg_fnn      = np.mean([fnn['features'][f]['r2']      for f in features])\n\
+        \    avg_cnn_lstm = np.mean([cnn_lstm['features'][f]['r2'] for f in features])\
+        \  \n\n    print(\"\\n\" + \"=\"*80)\n    print(\"R\xC9SUM\xC9\")\n    print(\"\
+        =\"*80)\n    print(f\"CNN R\xB2 moyen:      {avg_cnn:.4f}\")\n    print(f\"\
+        FNN R\xB2 moyen:      {avg_fnn:.4f}\")\n    print(f\"CNN-LSTM R\xB2 moyen:\
+        \ {avg_cnn_lstm:.4f}\")            \n\n    # -----------------------------\n\
+        \    # DECISION\n    # -----------------------------\n    avg_scores = {'CNN':\
+        \ avg_cnn, 'FNN': avg_fnn, 'CNN-LSTM': avg_cnn_lstm}   \n    best_model =\
+        \ max(avg_scores, key=avg_scores.get)\n    best_avg   = avg_scores[best_model]\n\
+        \n    # V\xE9rifier s'il y a \xE9galit\xE9 sur le R\xB2 moyen\n    tied =\
+        \ [m for m, v in avg_scores.items() if v == best_avg]\n\n    if len(tied)\
+        \ == 1:\n        reasoning = f\"{best_model} a meilleur R\xB2 moyen ({best_avg:.4f})\"\
+        \n    else:\n        # D\xE9partager par nombre de features gagn\xE9es\n \
+        \       best_model = max(tied, key=lambda m: feature_wins[m])\n        reasoning\
+        \  = f\"\xE9galit\xE9 moyenne mais {best_model} gagne plus de features\"\n\
+        \n    print(\"\\n\" + \"=\"*80)\n    print(f\"MEILLEUR MOD\xC8LE: {best_model}\"\
+        )\n    print(reasoning)\n    print(\"=\"*80)\n\n    # -----------------------------\n\
+        \    # SAVE RESULT\n    # -----------------------------\n    results = {\n\
+        \        \"best_model\":    best_model,\n        \"reasoning\":     reasoning,\n\
+        \        \"avg_r2\": {\n            \"CNN\":      float(avg_cnn),\n      \
+        \      \"FNN\":      float(avg_fnn),\n            \"CNN-LSTM\": float(avg_cnn_lstm)\
+        \                     \n        },\n        \"feature_wins\":    feature_wins,\n\
+        \        \"total_features\":  len(features),\n        \"feature_comparison\"\
+        : feature_comparison,               \n        \"cnn_features\":      cnn[\"\
+        features\"],\n        \"fnn_features\":      fnn[\"features\"],\n        \"\
+        cnn_lstm_features\": cnn_lstm[\"features\"]              \n    }\n\n    with\
+        \ open(selection_result, 'w') as f:\n        json.dump(results, f, indent=2)\n\
+        \n    print(\"\\n\u2714 R\xE9sultat sauvegard\xE9\")\n\nimport argparse\n\
+        _parser = argparse.ArgumentParser(prog='Select best model', description='')\n\
+        _parser.add_argument(\"--cnn-metrics\", dest=\"cnn_metrics\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--fnn-metrics\", dest=\"\
+        fnn_metrics\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --cnn-lstm-metrics\", dest=\"cnn_lstm_metrics\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--selection-result\"\
+        , dest=\"selection_result\", type=_make_parent_dirs_and_return_path, required=True,\
+        \ default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n\
+        _outputs = select_best_model(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: evaluate-3-test_metrics, path: /tmp/inputs/cnn_lstm_metrics/data}
+      - {name: evaluate-2-test_metrics, path: /tmp/inputs/cnn_metrics/data}
+      - {name: evaluate-test_metrics, path: /tmp/inputs/fnn_metrics/data}
+    outputs:
+      artifacts:
+      - {name: select-best-model-selection_result, path: /tmp/outputs/selection_result/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "false"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--cnn-metrics", {"inputPath": "cnn_metrics"}, "--fnn-metrics",
+          {"inputPath": "fnn_metrics"}, "--cnn-lstm-metrics", {"inputPath": "cnn_lstm_metrics"},
+          "--selection-result", {"outputPath": "selection_result"}], "command": ["sh",
+          "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def _make_parent_dirs_and_return_path(file_path:
+          str):\n    import os\n    os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return
+          file_path\n\ndef select_best_model(\n    cnn_metrics,\n    fnn_metrics,\n    cnn_lstm_metrics,       \n    selection_result\n):\n    import
+          json\n    import numpy as np\n\n    print(\"=\"*80)\n    print(\"S\u00c9LECTION
+          DU MEILLEUR MOD\u00c8LE - R\u00b2\")\n    print(\"=\"*80)\n\n    # -----------------------------\n    #
+          LOAD METRICS\n    # -----------------------------\n    with open(cnn_metrics,
+          ''r'') as f:\n        cnn = json.load(f)\n    with open(fnn_metrics, ''r'')
+          as f:\n        fnn = json.load(f)\n    with open(cnn_lstm_metrics, ''r'')
+          as f:          \n        cnn_lstm = json.load(f)\n\n    features = list(cnn[''features''].keys())\n    print(f\"\\nComparaison
+          sur {len(features)} features\\n\")\n\n    # -----------------------------\n    #
+          STATS\n    # -----------------------------\n    feature_wins = {''CNN'':
+          0, ''FNN'': 0, ''CNN-LSTM'': 0}       \n    feature_comparison = {}\n\n    print(f\"{''Feature'':<20}
+          {''CNN R\u00b2'':<12} {''FNN R\u00b2'':<12} {''CNN-LSTM R\u00b2'':<14} {''Diff'':<10}
+          {''Winner''}\")\n    print(\"-\"*90)\n\n    for f in features:\n        cnn_r2      =
+          cnn[''features''][f][''r2'']\n        fnn_r2      = fnn[''features''][f][''r2'']\n        cnn_lstm_r2
+          = cnn_lstm[''features''][f][''r2'']            \n\n        best_r2 = max(cnn_r2,
+          fnn_r2, cnn_lstm_r2)           \n\n        if best_r2 == cnn_lstm_r2 and
+          cnn_lstm_r2 > max(cnn_r2, fnn_r2):\n            winner = \"CNN-LSTM\"\n            feature_wins[''CNN-LSTM'']
+          += 1\n        elif cnn_r2 >= fnn_r2 and cnn_r2 >= cnn_lstm_r2:\n            if
+          cnn_r2 == fnn_r2 == cnn_lstm_r2:\n                winner = \"EQUAL\"\n            else:\n                winner
+          = \"CNN\"\n                feature_wins[''CNN''] += 1\n        elif fnn_r2
+          >= cnn_r2 and fnn_r2 >= cnn_lstm_r2:\n            winner = \"FNN\"\n            feature_wins[''FNN'']
+          += 1\n        else:\n            winner = \"CNN-LSTM\"\n            feature_wins[''CNN-LSTM'']
+          += 1\n\n        diff = cnn_lstm_r2 - max(cnn_r2, fnn_r2)               \n\n        feature_comparison[f]
+          = {\n            \"cnn_r2\":      cnn_r2,\n            \"fnn_r2\":      fnn_r2,\n            \"cnn_lstm_r2\":
+          cnn_lstm_r2,\n            \"diff\":        diff,\n            \"winner\":      winner\n        }\n\n        print(\n            f\"{f:<20}
+          {cnn_r2:<12.4f} {fnn_r2:<12.4f} \"\n            f\"{cnn_lstm_r2:<14.4f}
+          {diff:<+10.4f} {winner}\"\n        )\n\n    # -----------------------------\n    #
+          AVERAGE R2\n    # -----------------------------\n    avg_cnn      = np.mean([cnn[''features''][f][''r2'']      for
+          f in features])\n    avg_fnn      = np.mean([fnn[''features''][f][''r2'']      for
+          f in features])\n    avg_cnn_lstm = np.mean([cnn_lstm[''features''][f][''r2'']
+          for f in features])  \n\n    print(\"\\n\" + \"=\"*80)\n    print(\"R\u00c9SUM\u00c9\")\n    print(\"=\"*80)\n    print(f\"CNN
+          R\u00b2 moyen:      {avg_cnn:.4f}\")\n    print(f\"FNN R\u00b2 moyen:      {avg_fnn:.4f}\")\n    print(f\"CNN-LSTM
+          R\u00b2 moyen: {avg_cnn_lstm:.4f}\")            \n\n    # -----------------------------\n    #
+          DECISION\n    # -----------------------------\n    avg_scores = {''CNN'':
+          avg_cnn, ''FNN'': avg_fnn, ''CNN-LSTM'': avg_cnn_lstm}   \n    best_model
+          = max(avg_scores, key=avg_scores.get)\n    best_avg   = avg_scores[best_model]\n\n    #
+          V\u00e9rifier s''il y a \u00e9galit\u00e9 sur le R\u00b2 moyen\n    tied
+          = [m for m, v in avg_scores.items() if v == best_avg]\n\n    if len(tied)
+          == 1:\n        reasoning = f\"{best_model} a meilleur R\u00b2 moyen ({best_avg:.4f})\"\n    else:\n        #
+          D\u00e9partager par nombre de features gagn\u00e9es\n        best_model
+          = max(tied, key=lambda m: feature_wins[m])\n        reasoning  = f\"\u00e9galit\u00e9
+          moyenne mais {best_model} gagne plus de features\"\n\n    print(\"\\n\"
+          + \"=\"*80)\n    print(f\"MEILLEUR MOD\u00c8LE: {best_model}\")\n    print(reasoning)\n    print(\"=\"*80)\n\n    #
+          -----------------------------\n    # SAVE RESULT\n    # -----------------------------\n    results
+          = {\n        \"best_model\":    best_model,\n        \"reasoning\":     reasoning,\n        \"avg_r2\":
+          {\n            \"CNN\":      float(avg_cnn),\n            \"FNN\":      float(avg_fnn),\n            \"CNN-LSTM\":
+          float(avg_cnn_lstm)                     \n        },\n        \"feature_wins\":    feature_wins,\n        \"total_features\":  len(features),\n        \"feature_comparison\":
+          feature_comparison,               \n        \"cnn_features\":      cnn[\"features\"],\n        \"fnn_features\":      fnn[\"features\"],\n        \"cnn_lstm_features\":
+          cnn_lstm[\"features\"]              \n    }\n\n    with open(selection_result,
+          ''w'') as f:\n        json.dump(results, f, indent=2)\n\n    print(\"\\n\u2714
+          R\u00e9sultat sauvegard\u00e9\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Select
+          best model'', description='''')\n_parser.add_argument(\"--cnn-metrics\",
+          dest=\"cnn_metrics\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--fnn-metrics\",
+          dest=\"fnn_metrics\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--cnn-lstm-metrics\",
+          dest=\"cnn_lstm_metrics\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--selection-result\",
+          dest=\"selection_result\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = select_best_model(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "cnn_metrics", "type": "String"}, {"name": "fnn_metrics",
+          "type": "String"}, {"name": "cnn_lstm_metrics", "type": "String"}], "name":
+          "Select best model", "outputs": [{"name": "selection_result", "type": "String"}]}',
+        pipelines.kubeflow.org/component_ref: '{}'}
+  - name: train-cnn-category
+    container:
+      args: [--input-json, /tmp/inputs/input_json/data, --model-output, /tmp/outputs/model_output/data,
+        --metrics-output, /tmp/outputs/metrics_output/data, --plot-output, /tmp/outputs/plot_output/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef train_cnn_category(\n    input_json,\n    model_output,\n    metrics_output,\n\
+        \    plot_output\n):\n    import os, json\n    import numpy as np\n    import\
+        \ tensorflow as tf\n    import matplotlib\n    matplotlib.use('Agg')\n   \
+        \ import matplotlib.pyplot as plt\n    from datetime import datetime\n   \
+        \ from sklearn.metrics import r2_score\n    from tensorflow.keras.models import\
+        \ Sequential\n    from tensorflow.keras.layers import Dense, Flatten, Input,Conv1D,\
+        \ MaxPooling1D\n    from tensorflow.keras.callbacks import EarlyStopping,\
+        \ ReduceLROnPlateau\n    from tensorflow.keras.metrics import RootMeanSquaredError\n\
+        \    from tensorflow.keras import backend as K\n\n    os.environ[\"TF_CPP_MIN_LOG_LEVEL\"\
+        ] = \"2\"\n\n    tf.random.set_seed(42)\n    np.random.seed(42)\n\n    print(\"\
+        D\xE9but de l'entra\xEEnement...\")\n\n    # --- Load data info ---\n    data\
+        \ = np.load(input_json)\n\n    X_train = data[\"X_train\"]\n    y_train =\
+        \ data[\"y_train\"]\n    X_val = data[\"X_val\"]\n    y_val = data[\"y_val\"\
+        ]\n    horizon = int(data[\"horizon\"])\n\n    print(f\"X_train: {X_train.shape}\"\
+        )\n    print(f\"y_train: {y_train.shape}\")\n    print(f\"X_val: {X_val.shape}\"\
+        )\n    print(f\"y_val: {y_val.shape}\")\n\n    # --- D\xE9finir les m\xE9\
+        triques ---\n    def tolerance_accuracy(y_true, y_pred, tol=0.15):\n     \
+        \   \"\"\"\n        Calculates the percentage of predictions that fall within\
+        \ a (tol) tolerance\n        of the actual values.\n        \"\"\"\n     \
+        \   y_true = tf.cast(y_true, tf.float32)\n        y_pred = tf.cast(y_pred,\
+        \ tf.float32)\n\n        epsilon = K.epsilon()\n\n        absolute_error =\
+        \ tf.abs(y_pred - y_true)\n        relative_error = absolute_error / (tf.abs(y_true)\
+        \ + epsilon)\n\n        within_tolerance = tf.less(relative_error, tol)\n\
+        \        accuracy = tf.reduce_mean(tf.cast(within_tolerance, tf.float32))\n\
+        \n        return accuracy\n\n    # --- Configuration des epochs ---\n    EPOCH_LIMITS\
+        \ = {\n        'fnn': 60,\n        'cnn': 60,\n        'lstm': 60,\n     \
+        \   'gru': 60,\n        'bi-lstm': 60,\n        'cnn-lstm': 60\n    }\n\n\
+        \    def train_optimized_model(model, model_name, X_train, y_train, X_val,\
+        \ y_val, batch_size=64):\n        \"\"\"\n        Trains a model using tf.data\
+        \ pipelines, dynamic learning rates, and early stopping.\n        Enforces\
+        \ the maximum epochs defined in the reference paper.\n        \"\"\"\n   \
+        \     max_epochs = EPOCH_LIMITS.get(model_name.lower(), 100)\n\n        #\
+        \ Calculate a dynamic patience scale (20% of max epochs, minimum of 3)\n \
+        \       patience_scale = max(3, max_epochs // 20)\n\n        # Build High-Speed\
+        \ tf.data Pipelines\n        # .cache() keeps data in memory, .prefetch()\
+        \ loads next batch while GPU trains\n        train_dataset = tf.data.Dataset.from_tensor_slices((X_train,\
+        \ y_train))\n        train_dataset = train_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\
+        \n        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))\n\
+        \        val_dataset = val_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\
+        \n        # Configure Callbacks\n        early_stop = EarlyStopping(\n   \
+        \         monitor='val_loss',\n            patience=patience_scale,      \
+        \ # Wait dynamically based on model\n            restore_best_weights=True,\
+        \     # Revert to the best epoch automatically\n            verbose=1\n  \
+        \      )\n\n        reduce_lr = ReduceLROnPlateau(\n            monitor='val_loss',\n\
+        \            factor=0.5,                    # Cut learning rate in half if\
+        \ plateaued\n            patience=patience_scale // 2,  # Trigger LR reduction\
+        \ before Early Stopping kicks in\n            min_lr=1e-6,\n            verbose=1\n\
+        \        )\n\n        # Train the Model using the pipeline\n        history\
+        \ = model.fit(\n            train_dataset,\n            validation_data=val_dataset,\n\
+        \            epochs=max_epochs,\n            callbacks=[early_stop, reduce_lr],\n\
+        \            verbose=2 # Cleaner console output for hundreds of epochs\n \
+        \       )\n\n        return history\n\n    def train_model_wrapper(model,\
+        \ model_name, X_train, y_train, X_val, y_val, epochs, batch_size=64, optimized=True):\n\
+        \        \"\"\"\n        Toggles between standard Keras .fit() and the optimized\
+        \ tf.data pipeline.\n        \"\"\"\n        if optimized:\n            print(f\"\
+        --- Training {model_name.upper()} (Optimized Pipeline) ---\")\n          \
+        \  history = train_optimized_model(\n                model=model,\n      \
+        \          model_name=model_name,\n                X_train=X_train,\n    \
+        \            y_train=y_train,\n                X_val=X_val,\n            \
+        \    y_val=y_val,\n                batch_size=batch_size\n            )\n\
+        \        else:\n            print(f\"--- Training {model_name.upper()} (Standard\
+        \ .fit) ---\")\n            history = model.fit(\n                X_train,\
+        \ y_train,\n                validation_data=(X_val, y_val),\n            \
+        \    epochs=epochs,\n                batch_size=batch_size,\n            \
+        \    verbose=1\n            )\n        return history\n\n    def build_cnn_model(input_shape,\
+        \ output_dim):\n        model = Sequential()\n\n        # Input layer\n  \
+        \      model.add(Input(shape=input_shape))\n\n        # 1D Convolutional Layer\
+        \ (64 filters, kernel size 2)\n        model.add(Conv1D(filters=64, kernel_size=2,\
+        \ activation='relu'))\n\n        # Max Pooling Layer (pool size 2)\n     \
+        \   model.add(MaxPooling1D(pool_size=2))\n\n        # Flatten to transition\
+        \ from 3D to 2D\n        model.add(Flatten())\n\n        # Fully Connected\
+        \ Hidden Layer (50 units)\n        model.add(Dense(50, activation='relu'))\n\
+        \n        # Output layer\n        model.add(Dense(output_dim, activation='linear'))\n\
+        \n        model.compile(\n            optimizer='adam',\n            loss='mse',\n\
+        \            metrics=[\n                'mae',\n                RootMeanSquaredError(name='rmse'),\n\
+        \                tolerance_accuracy\n            ]\n        )\n\n        return\
+        \ model\n\n    model = build_cnn_model(\n        input_shape=(X_train.shape[1],\
+        \ X_train.shape[2]),\n        output_dim=y_train.shape[1]\n    )\n\n    #\
+        \ Afficher le r\xE9sum\xE9\n    model.summary()\n\n    # --- Entra\xEEnement\
+        \ ---\n\n    history_cnn_agg = train_model_wrapper(model, 'cnn', X_train,\
+        \ y_train, X_val, y_val, epochs=60, optimized=True)\n\n    # --- Visualisation\
+        \ ---\n    def plot_training_history(history, model_name, plot_output_path):\n\
+        \        \"\"\"\n        Plots the training and validation Loss and Tolerance\
+        \ Accuracy in separate figures\n        \"\"\"\n        # Plot Loss (MSE)\n\
+        \        os.makedirs(plot_output_path, exist_ok=True)\n        fig1, ax1 =\
+        \ plt.subplots(figsize=(3.5, 2.5))\n\n        ax1.plot(history.history['loss'],\
+        \ label='Train Loss', color='blue', linewidth=1.2)\n        ax1.plot(history.history['val_loss'],\
+        \ label='Val Loss', color='red', linestyle='--', linewidth=1.2)\n\n      \
+        \  ax1.set_xlabel('Epochs', fontsize=8)\n        ax1.set_ylabel('Loss (MSE)',\
+        \ fontsize=8)\n        ax1.tick_params(axis='both', labelsize=8)\n       \
+        \ ax1.legend(fontsize=8, frameon=False)\n        ax1.grid(True, linestyle=':',\
+        \ alpha=0.5, color='gray')\n\n        plt.tight_layout()\n        loss_plot_path\
+        \ = os.path.join(plot_output_path, f'Loss_{model_name.replace(\"-\", \"_\"\
+        )}.pdf')\n        plt.savefig(loss_plot_path, format='pdf', bbox_inches='tight')\n\
+        \        plt.close()\n\n        # Plot Custom Metric (Tolerance Accuracy)\n\
+        \        fig2, ax2 = plt.subplots(figsize=(3.5, 2.5))\n\n        if 'tolerance_accuracy'\
+        \ in history.history:\n            ax2.plot(history.history['tolerance_accuracy'],\
+        \ label='Train Acc', color='blue', linewidth=1.2)\n            ax2.plot(history.history['val_tolerance_accuracy'],\
+        \ label='Val Acc', color='red', linestyle='--', linewidth=1.2)\n\n       \
+        \     ax2.set_xlabel('Epochs', fontsize=8)\n            ax2.set_ylabel('Tol.\
+        \ Accuracy', fontsize=8)\n            ax2.tick_params(axis='both', labelsize=8)\n\
+        \            ax2.legend(fontsize=8, frameon=False)\n            ax2.grid(True,\
+        \ linestyle=':', alpha=0.5, color='gray')\n\n            plt.tight_layout()\n\
+        \            acc_plot_path = os.path.join(plot_output_path, f'Accuracy_{model_name.replace(\"\
+        -\", \"_\")}.pdf')\n            plt.savefig(acc_plot_path, format='pdf', bbox_inches='tight')\n\
+        \            plt.close()\n\n    # Sauvegarder les plots\n    plots_dir = os.path.join(plot_output,\
+        \ \"plots\")\n    plot_training_history(history_cnn_agg, \"CNN_Model_aggregated\"\
+        , plots_dir)\n\n    os.makedirs(model_output, exist_ok=True)\n\n    model_filename\
+        \ = f\"cnn_model_h{horizon}.keras\"\n    model_path = os.path.join(model_output,\
+        \ model_filename)\n\n    model.save(model_path)\n\n    print(f\" Mod\xE8le\
+        \ sauvegard\xE9: {model_path}\")\n\n    # --- Pr\xE9dictions ---\n    y_pred\
+        \ = model.predict(X_val)\n\n    # --- M\xE9triques ---\n    metrics = {\n\
+        \        'model_name': 'CNN',\n        'horizon': horizon,\n        'final_train_loss':\
+        \ float(history_cnn_agg.history['loss'][-1]),\n        'final_val_loss': float(history_cnn_agg.history['val_loss'][-1]),\n\
+        \        'best_val_loss': float(min(history_cnn_agg.history['val_loss'])),\n\
+        \        'best_epoch': int(np.argmin(history_cnn_agg.history['val_loss'])),\n\
+        \        'final_val_mae': float(history_cnn_agg.history['val_mae'][-1]),\n\
+        \        'final_val_rmse': float(history_cnn_agg.history['val_rmse'][-1]),\n\
+        \        'final_val_tolerance_acc': float(history_cnn_agg.history['val_tolerance_accuracy'][-1]),\n\
+        \        'r2_score': float(r2_score(y_val.flatten(), y_pred.flatten())),\n\
+        \        'epochs_trained': len(history_cnn_agg.history['loss']),\n       \
+        \ 'training_completed': datetime.now().isoformat()\n    }\n\n    # --- Sauvegarde\
+        \ metrics ---\n    with open(metrics_output, 'w') as f:\n        json.dump(metrics,\
+        \ f, indent=2)\n\n    print(\"\\n --- M\xE9triques finales ---\")\n    for\
+        \ key, value in metrics.items():\n        print(f\"{key}: {value}\")\n\n \
+        \   print(\" Entra\xEEnement termin\xE9 avec succ\xE8s !\")\n\nimport argparse\n\
+        _parser = argparse.ArgumentParser(prog='Train cnn category', description='')\n\
+        _parser.add_argument(\"--input-json\", dest=\"input_json\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-output\", dest=\"\
+        model_output\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--metrics-output\", dest=\"metrics_output\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\"\
+        , dest=\"plot_output\", type=_make_parent_dirs_and_return_path, required=True,\
+        \ default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n\
+        _outputs = train_cnn_category(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: preprocess-output, path: /tmp/inputs/input_json/data}
+    outputs:
+      artifacts:
+      - {name: train-cnn-category-metrics_output, path: /tmp/outputs/metrics_output/data}
+      - {name: train-cnn-category-model_output, path: /tmp/outputs/model_output/data}
+      - {name: train-cnn-category-plot_output, path: /tmp/outputs/plot_output/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "false"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--input-json", {"inputPath": "input_json"}, "--model-output",
+          {"outputPath": "model_output"}, "--metrics-output", {"outputPath": "metrics_output"},
+          "--plot-output", {"outputPath": "plot_output"}], "command": ["sh", "-ec",
+          "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def _make_parent_dirs_and_return_path(file_path:
+          str):\n    import os\n    os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return
+          file_path\n\ndef train_cnn_category(\n    input_json,\n    model_output,\n    metrics_output,\n    plot_output\n):\n    import
+          os, json\n    import numpy as np\n    import tensorflow as tf\n    import
+          matplotlib\n    matplotlib.use(''Agg'')\n    import matplotlib.pyplot as
+          plt\n    from datetime import datetime\n    from sklearn.metrics import
+          r2_score\n    from tensorflow.keras.models import Sequential\n    from tensorflow.keras.layers
+          import Dense, Flatten, Input,Conv1D, MaxPooling1D\n    from tensorflow.keras.callbacks
+          import EarlyStopping, ReduceLROnPlateau\n    from tensorflow.keras.metrics
+          import RootMeanSquaredError\n    from tensorflow.keras import backend as
+          K\n\n    os.environ[\"TF_CPP_MIN_LOG_LEVEL\"] = \"2\"\n\n    tf.random.set_seed(42)\n    np.random.seed(42)\n\n    print(\"D\u00e9but
+          de l''entra\u00eenement...\")\n\n    # --- Load data info ---\n    data
+          = np.load(input_json)\n\n    X_train = data[\"X_train\"]\n    y_train =
+          data[\"y_train\"]\n    X_val = data[\"X_val\"]\n    y_val = data[\"y_val\"]\n    horizon
+          = int(data[\"horizon\"])\n\n    print(f\"X_train: {X_train.shape}\")\n    print(f\"y_train:
+          {y_train.shape}\")\n    print(f\"X_val: {X_val.shape}\")\n    print(f\"y_val:
+          {y_val.shape}\")\n\n    # --- D\u00e9finir les m\u00e9triques ---\n    def
+          tolerance_accuracy(y_true, y_pred, tol=0.15):\n        \"\"\"\n        Calculates
+          the percentage of predictions that fall within a (tol) tolerance\n        of
+          the actual values.\n        \"\"\"\n        y_true = tf.cast(y_true, tf.float32)\n        y_pred
+          = tf.cast(y_pred, tf.float32)\n\n        epsilon = K.epsilon()\n\n        absolute_error
+          = tf.abs(y_pred - y_true)\n        relative_error = absolute_error / (tf.abs(y_true)
+          + epsilon)\n\n        within_tolerance = tf.less(relative_error, tol)\n        accuracy
+          = tf.reduce_mean(tf.cast(within_tolerance, tf.float32))\n\n        return
+          accuracy\n\n    # --- Configuration des epochs ---\n    EPOCH_LIMITS = {\n        ''fnn'':
+          60,\n        ''cnn'': 60,\n        ''lstm'': 60,\n        ''gru'': 60,\n        ''bi-lstm'':
+          60,\n        ''cnn-lstm'': 60\n    }\n\n    def train_optimized_model(model,
+          model_name, X_train, y_train, X_val, y_val, batch_size=64):\n        \"\"\"\n        Trains
+          a model using tf.data pipelines, dynamic learning rates, and early stopping.\n        Enforces
+          the maximum epochs defined in the reference paper.\n        \"\"\"\n        max_epochs
+          = EPOCH_LIMITS.get(model_name.lower(), 100)\n\n        # Calculate a dynamic
+          patience scale (20% of max epochs, minimum of 3)\n        patience_scale
+          = max(3, max_epochs // 20)\n\n        # Build High-Speed tf.data Pipelines\n        #
+          .cache() keeps data in memory, .prefetch() loads next batch while GPU trains\n        train_dataset
+          = tf.data.Dataset.from_tensor_slices((X_train, y_train))\n        train_dataset
+          = train_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\n        val_dataset
+          = tf.data.Dataset.from_tensor_slices((X_val, y_val))\n        val_dataset
+          = val_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\n        #
+          Configure Callbacks\n        early_stop = EarlyStopping(\n            monitor=''val_loss'',\n            patience=patience_scale,       #
+          Wait dynamically based on model\n            restore_best_weights=True,     #
+          Revert to the best epoch automatically\n            verbose=1\n        )\n\n        reduce_lr
+          = ReduceLROnPlateau(\n            monitor=''val_loss'',\n            factor=0.5,                    #
+          Cut learning rate in half if plateaued\n            patience=patience_scale
+          // 2,  # Trigger LR reduction before Early Stopping kicks in\n            min_lr=1e-6,\n            verbose=1\n        )\n\n        #
+          Train the Model using the pipeline\n        history = model.fit(\n            train_dataset,\n            validation_data=val_dataset,\n            epochs=max_epochs,\n            callbacks=[early_stop,
+          reduce_lr],\n            verbose=2 # Cleaner console output for hundreds
+          of epochs\n        )\n\n        return history\n\n    def train_model_wrapper(model,
+          model_name, X_train, y_train, X_val, y_val, epochs, batch_size=64, optimized=True):\n        \"\"\"\n        Toggles
+          between standard Keras .fit() and the optimized tf.data pipeline.\n        \"\"\"\n        if
+          optimized:\n            print(f\"--- Training {model_name.upper()} (Optimized
+          Pipeline) ---\")\n            history = train_optimized_model(\n                model=model,\n                model_name=model_name,\n                X_train=X_train,\n                y_train=y_train,\n                X_val=X_val,\n                y_val=y_val,\n                batch_size=batch_size\n            )\n        else:\n            print(f\"---
+          Training {model_name.upper()} (Standard .fit) ---\")\n            history
+          = model.fit(\n                X_train, y_train,\n                validation_data=(X_val,
+          y_val),\n                epochs=epochs,\n                batch_size=batch_size,\n                verbose=1\n            )\n        return
+          history\n\n    def build_cnn_model(input_shape, output_dim):\n        model
+          = Sequential()\n\n        # Input layer\n        model.add(Input(shape=input_shape))\n\n        #
+          1D Convolutional Layer (64 filters, kernel size 2)\n        model.add(Conv1D(filters=64,
+          kernel_size=2, activation=''relu''))\n\n        # Max Pooling Layer (pool
+          size 2)\n        model.add(MaxPooling1D(pool_size=2))\n\n        # Flatten
+          to transition from 3D to 2D\n        model.add(Flatten())\n\n        # Fully
+          Connected Hidden Layer (50 units)\n        model.add(Dense(50, activation=''relu''))\n\n        #
+          Output layer\n        model.add(Dense(output_dim, activation=''linear''))\n\n        model.compile(\n            optimizer=''adam'',\n            loss=''mse'',\n            metrics=[\n                ''mae'',\n                RootMeanSquaredError(name=''rmse''),\n                tolerance_accuracy\n            ]\n        )\n\n        return
+          model\n\n    model = build_cnn_model(\n        input_shape=(X_train.shape[1],
+          X_train.shape[2]),\n        output_dim=y_train.shape[1]\n    )\n\n    #
+          Afficher le r\u00e9sum\u00e9\n    model.summary()\n\n    # --- Entra\u00eenement
+          ---\n\n    history_cnn_agg = train_model_wrapper(model, ''cnn'', X_train,
+          y_train, X_val, y_val, epochs=60, optimized=True)\n\n    # --- Visualisation
+          ---\n    def plot_training_history(history, model_name, plot_output_path):\n        \"\"\"\n        Plots
+          the training and validation Loss and Tolerance Accuracy in separate figures\n        \"\"\"\n        #
+          Plot Loss (MSE)\n        os.makedirs(plot_output_path, exist_ok=True)\n        fig1,
+          ax1 = plt.subplots(figsize=(3.5, 2.5))\n\n        ax1.plot(history.history[''loss''],
+          label=''Train Loss'', color=''blue'', linewidth=1.2)\n        ax1.plot(history.history[''val_loss''],
+          label=''Val Loss'', color=''red'', linestyle=''--'', linewidth=1.2)\n\n        ax1.set_xlabel(''Epochs'',
+          fontsize=8)\n        ax1.set_ylabel(''Loss (MSE)'', fontsize=8)\n        ax1.tick_params(axis=''both'',
+          labelsize=8)\n        ax1.legend(fontsize=8, frameon=False)\n        ax1.grid(True,
+          linestyle='':'', alpha=0.5, color=''gray'')\n\n        plt.tight_layout()\n        loss_plot_path
+          = os.path.join(plot_output_path, f''Loss_{model_name.replace(\"-\", \"_\")}.pdf'')\n        plt.savefig(loss_plot_path,
+          format=''pdf'', bbox_inches=''tight'')\n        plt.close()\n\n        #
+          Plot Custom Metric (Tolerance Accuracy)\n        fig2, ax2 = plt.subplots(figsize=(3.5,
+          2.5))\n\n        if ''tolerance_accuracy'' in history.history:\n            ax2.plot(history.history[''tolerance_accuracy''],
+          label=''Train Acc'', color=''blue'', linewidth=1.2)\n            ax2.plot(history.history[''val_tolerance_accuracy''],
+          label=''Val Acc'', color=''red'', linestyle=''--'', linewidth=1.2)\n\n            ax2.set_xlabel(''Epochs'',
+          fontsize=8)\n            ax2.set_ylabel(''Tol. Accuracy'', fontsize=8)\n            ax2.tick_params(axis=''both'',
+          labelsize=8)\n            ax2.legend(fontsize=8, frameon=False)\n            ax2.grid(True,
+          linestyle='':'', alpha=0.5, color=''gray'')\n\n            plt.tight_layout()\n            acc_plot_path
+          = os.path.join(plot_output_path, f''Accuracy_{model_name.replace(\"-\",
+          \"_\")}.pdf'')\n            plt.savefig(acc_plot_path, format=''pdf'', bbox_inches=''tight'')\n            plt.close()\n\n    #
+          Sauvegarder les plots\n    plots_dir = os.path.join(plot_output, \"plots\")\n    plot_training_history(history_cnn_agg,
+          \"CNN_Model_aggregated\", plots_dir)\n\n    os.makedirs(model_output, exist_ok=True)\n\n    model_filename
+          = f\"cnn_model_h{horizon}.keras\"\n    model_path = os.path.join(model_output,
+          model_filename)\n\n    model.save(model_path)\n\n    print(f\" Mod\u00e8le
+          sauvegard\u00e9: {model_path}\")\n\n    # --- Pr\u00e9dictions ---\n    y_pred
+          = model.predict(X_val)\n\n    # --- M\u00e9triques ---\n    metrics = {\n        ''model_name'':
+          ''CNN'',\n        ''horizon'': horizon,\n        ''final_train_loss'': float(history_cnn_agg.history[''loss''][-1]),\n        ''final_val_loss'':
+          float(history_cnn_agg.history[''val_loss''][-1]),\n        ''best_val_loss'':
+          float(min(history_cnn_agg.history[''val_loss''])),\n        ''best_epoch'':
+          int(np.argmin(history_cnn_agg.history[''val_loss''])),\n        ''final_val_mae'':
+          float(history_cnn_agg.history[''val_mae''][-1]),\n        ''final_val_rmse'':
+          float(history_cnn_agg.history[''val_rmse''][-1]),\n        ''final_val_tolerance_acc'':
+          float(history_cnn_agg.history[''val_tolerance_accuracy''][-1]),\n        ''r2_score'':
+          float(r2_score(y_val.flatten(), y_pred.flatten())),\n        ''epochs_trained'':
+          len(history_cnn_agg.history[''loss'']),\n        ''training_completed'':
+          datetime.now().isoformat()\n    }\n\n    # --- Sauvegarde metrics ---\n    with
+          open(metrics_output, ''w'') as f:\n        json.dump(metrics, f, indent=2)\n\n    print(\"\\n
+          --- M\u00e9triques finales ---\")\n    for key, value in metrics.items():\n        print(f\"{key}:
+          {value}\")\n\n    print(\" Entra\u00eenement termin\u00e9 avec succ\u00e8s
+          !\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Train
+          cnn category'', description='''')\n_parser.add_argument(\"--input-json\",
+          dest=\"input_json\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-output\",
+          dest=\"model_output\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parser.add_argument(\"--metrics-output\", dest=\"metrics_output\",
+          type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\",
+          dest=\"plot_output\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = train_cnn_category(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "input_json", "type": "String"}], "name": "Train cnn
+          category", "outputs": [{"name": "model_output", "type": "String"}, {"name":
+          "metrics_output", "type": "String"}, {"name": "plot_output", "type": "String"}]}',
+        pipelines.kubeflow.org/component_ref: '{}'}
+  - name: train-cnn-lstm-category
+    container:
+      args: [--input-json, /tmp/inputs/input_json/data, --model-output, /tmp/outputs/model_output/data,
+        --metrics-output, /tmp/outputs/metrics_output/data, --plot-output, /tmp/outputs/plot_output/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef train_cnn_lstm_category(\n    input_json,\n    model_output,\n    metrics_output,\n\
+        \    plot_output\n):\n    import os, json\n    import numpy as np\n    import\
+        \ tensorflow as tf\n    import matplotlib\n    matplotlib.use('Agg')\n   \
+        \ import matplotlib.pyplot as plt\n    from datetime import datetime\n   \
+        \ from sklearn.metrics import r2_score\n    from tensorflow.keras.models import\
+        \ Sequential\n    from tensorflow.keras.layers import (\n        Dense, Flatten,\
+        \ Input, Conv1D, MaxPooling1D,\n        LSTM, RepeatVector\n    )\n    from\
+        \ tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau\n   \
+        \ from tensorflow.keras.metrics import RootMeanSquaredError, MeanAbsolutePercentageError\n\
+        \    from tensorflow.keras import backend as K\n\n    os.environ[\"TF_CPP_MIN_LOG_LEVEL\"\
+        ] = \"2\"\n\n    tf.random.set_seed(42)\n    np.random.seed(42)\n\n    print(\"\
+        D\xE9but de l'entra\xEEnement...\")\n\n    # --- Load data ---\n    data =\
+        \ np.load(input_json)\n\n    X_train = data[\"X_train\"]\n    y_train = data[\"\
+        y_train\"]\n    X_val   = data[\"X_val\"]\n    y_val   = data[\"y_val\"]\n\
+        \    horizon = int(data[\"horizon\"])\n\n    print(f\"X_train: {X_train.shape}\"\
+        )\n    print(f\"y_train: {y_train.shape}\")\n    print(f\"X_val:   {X_val.shape}\"\
+        )\n    print(f\"y_val:   {y_val.shape}\")\n\n    # --- M\xE9triques custom\
+        \ ---\n    def tolerance_accuracy(y_true, y_pred, tol=0.15):\n        y_true\
+        \ = tf.cast(y_true, tf.float32)\n        y_pred = tf.cast(y_pred, tf.float32)\n\
+        \        epsilon = K.epsilon()\n        absolute_error = tf.abs(y_pred - y_true)\n\
+        \        relative_error = absolute_error / (tf.abs(y_true) + epsilon)\n  \
+        \      within_tolerance = tf.less(relative_error, tol)\n        return tf.reduce_mean(tf.cast(within_tolerance,\
+        \ tf.float32))\n\n    # --- Epoch limits ---\n    EPOCH_LIMITS = {\n     \
+        \   'fnn': 60, 'cnn': 60, 'lstm': 60,\n        'gru': 60, 'bi-lstm': 60, 'cnn-lstm':\
+        \ 60\n    }\n\n    def train_optimized_model(model, model_name, X_train, y_train,\
+        \ X_val, y_val, batch_size=64):\n        max_epochs     = EPOCH_LIMITS.get(model_name.lower(),\
+        \ 100)\n        patience_scale = max(3, max_epochs // 20)\n\n        train_dataset\
+        \ = tf.data.Dataset.from_tensor_slices((X_train, y_train))\n        train_dataset\
+        \ = train_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\n\
+        \        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))\n\
+        \        val_dataset = val_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\
+        \n        early_stop = EarlyStopping(\n            monitor='val_loss',\n \
+        \           patience=patience_scale,\n            restore_best_weights=True,\n\
+        \            verbose=1\n        )\n        reduce_lr = ReduceLROnPlateau(\n\
+        \            monitor='val_loss',\n            factor=0.5,\n            patience=patience_scale\
+        \ // 2,\n            min_lr=1e-6,\n            verbose=1\n        )\n\n  \
+        \      history = model.fit(\n            train_dataset,\n            validation_data=val_dataset,\n\
+        \            epochs=max_epochs,\n            callbacks=[early_stop, reduce_lr],\n\
+        \            verbose=2\n        )\n        return history\n\n    def train_model_wrapper(model,\
+        \ model_name, X_train, y_train, X_val, y_val, epochs, batch_size=64, optimized=True):\n\
+        \        if optimized:\n            print(f\"--- Training {model_name.upper()}\
+        \ (Optimized Pipeline) ---\")\n            return train_optimized_model(model,\
+        \ model_name, X_train, y_train, X_val, y_val, batch_size)\n        else:\n\
+        \            print(f\"--- Training {model_name.upper()} (Standard .fit) ---\"\
+        )\n            return model.fit(\n                X_train, y_train,\n    \
+        \            validation_data=(X_val, y_val),\n                epochs=epochs,\n\
+        \                batch_size=batch_size,\n                verbose=1\n     \
+        \       )\n\n    def build_cnn_lstm_model(input_shape, output_dim):\n    \
+        \    model = Sequential([\n            Input(shape=input_shape),\n       \
+        \     Conv1D(filters=64, kernel_size=3, activation='relu'),\n            MaxPooling1D(pool_size=2),\n\
+        \            Flatten(),\n            RepeatVector(1),\n            LSTM(25,\
+        \ activation='relu', return_sequences=True),\n            LSTM(25, activation='relu',\
+        \ return_sequences=False),\n            Dense(output_dim, activation='linear')\n\
+        \        ])\n        model.compile(\n            optimizer='adam',\n     \
+        \       loss='mse',\n            metrics=[\n                'mae',\n     \
+        \           RootMeanSquaredError(name='rmse'),\n                MeanAbsolutePercentageError(name='mape'),\n\
+        \                tolerance_accuracy\n            ]\n        )\n        return\
+        \ model\n\n    model = build_cnn_lstm_model(\n        input_shape=(X_train.shape[1],\
+        \ X_train.shape[2]),\n        output_dim=y_train.shape[1]\n    )\n    model.summary()\n\
+        \n    # --- Entra\xEEnement ---\n    history_cnn_agg = train_model_wrapper(\n\
+        \        model, 'cnn-lstm',\n        X_train, y_train, X_val, y_val,\n   \
+        \     epochs=60, optimized=True\n    )\n\n    # --- Plots ---\n    def plot_training_history(history,\
+        \ model_name, plot_output_path):\n        os.makedirs(plot_output_path, exist_ok=True)\n\
+        \n        fig1, ax1 = plt.subplots(figsize=(3.5, 2.5))\n        ax1.plot(history.history['loss'],\
+        \     label='Train Loss', color='blue', linewidth=1.2)\n        ax1.plot(history.history['val_loss'],\
+        \ label='Val Loss',   color='red',  linestyle='--', linewidth=1.2)\n     \
+        \   ax1.set_xlabel('Epochs', fontsize=8)\n        ax1.set_ylabel('Loss (MSE)',\
+        \ fontsize=8)\n        ax1.tick_params(axis='both', labelsize=8)\n       \
+        \ ax1.legend(fontsize=8, frameon=False)\n        ax1.grid(True, linestyle=':',\
+        \ alpha=0.5, color='gray')\n        plt.tight_layout()\n        loss_path\
+        \ = os.path.join(plot_output_path, f'Loss_{model_name.replace(\"-\", \"_\"\
+        )}.pdf')\n        plt.savefig(loss_path, format='pdf', bbox_inches='tight')\n\
+        \        plt.close()\n\n        if 'tolerance_accuracy' in history.history:\n\
+        \            fig2, ax2 = plt.subplots(figsize=(3.5, 2.5))\n            ax2.plot(history.history['tolerance_accuracy'],\
+        \     label='Train Acc', color='blue', linewidth=1.2)\n            ax2.plot(history.history['val_tolerance_accuracy'],\
+        \ label='Val Acc',   color='red',  linestyle='--', linewidth=1.2)\n      \
+        \      ax2.set_xlabel('Epochs', fontsize=8)\n            ax2.set_ylabel('Tol.\
+        \ Accuracy', fontsize=8)\n            ax2.tick_params(axis='both', labelsize=8)\n\
+        \            ax2.legend(fontsize=8, frameon=False)\n            ax2.grid(True,\
+        \ linestyle=':', alpha=0.5, color='gray')\n            plt.tight_layout()\n\
+        \            acc_path = os.path.join(plot_output_path, f'Accuracy_{model_name.replace(\"\
+        -\", \"_\")}.pdf')\n            plt.savefig(acc_path, format='pdf', bbox_inches='tight')\n\
+        \            plt.close()\n\n    plots_dir = os.path.join(plot_output, \"plots\"\
+        )\n    os.makedirs(plots_dir, exist_ok=True)\n    plot_training_history(history_cnn_agg,\
+        \ \"CNN_LSTM_aggregated\", plots_dir)\n\n    # --- Sauvegarde mod\xE8le ---\n\
+        \n    os.makedirs(model_output, exist_ok=True)\n    model_filename = f\"cnn_lstm_model_h{horizon}.keras\"\
+        \n    model_path     = os.path.join(model_output, model_filename)\n    model.save(model_path)\n\
+        \    print(f\"Mod\xE8le sauvegard\xE9: {model_path}\")\n\n    # --- Pr\xE9\
+        dictions & M\xE9triques ---\n    y_pred = model.predict(X_val)\n\n    metrics\
+        \ = {\n        'model_name':              'CNNLSTM',\n        'horizon': \
+        \                horizon,\n        'final_train_loss':        float(history_cnn_agg.history['loss'][-1]),\n\
+        \        'final_val_loss':          float(history_cnn_agg.history['val_loss'][-1]),\n\
+        \        'best_val_loss':           float(min(history_cnn_agg.history['val_loss'])),\n\
+        \        'best_epoch':              int(np.argmin(history_cnn_agg.history['val_loss'])),\n\
+        \        'final_val_mae':           float(history_cnn_agg.history['val_mae'][-1]),\n\
+        \        'final_val_rmse':          float(history_cnn_agg.history['val_rmse'][-1]),\n\
+        \        'final_val_mape':          float(history_cnn_agg.history['val_mape'][-1]),\n\
+        \        'final_val_tolerance_acc': float(history_cnn_agg.history['val_tolerance_accuracy'][-1]),\n\
+        \        'r2_score':                float(r2_score(y_val.flatten(), y_pred.flatten())),\n\
+        \        'epochs_trained':          len(history_cnn_agg.history['loss']),\n\
+        \        'training_completed':      datetime.now().isoformat()\n    }\n\n\
+        \    os.makedirs(os.path.dirname(metrics_output), exist_ok=True)\n    with\
+        \ open(metrics_output, 'w') as f:\n        json.dump(metrics, f, indent=2)\n\
+        \n    print(\"\\n--- M\xE9triques finales ---\")\n    for key, value in metrics.items():\n\
+        \        print(f\"{key}: {value}\")\n\n    print(\"Entra\xEEnement termin\xE9\
+        \ avec succ\xE8s !\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Train\
+        \ cnn lstm category', description='')\n_parser.add_argument(\"--input-json\"\
+        , dest=\"input_json\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--model-output\", dest=\"model_output\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--metrics-output\"\
+        , dest=\"metrics_output\", type=_make_parent_dirs_and_return_path, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\", dest=\"\
+        plot_output\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
+        _parsed_args = vars(_parser.parse_args())\n\n_outputs = train_cnn_lstm_category(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: preprocess-output, path: /tmp/inputs/input_json/data}
+    outputs:
+      artifacts:
+      - {name: train-cnn-lstm-category-metrics_output, path: /tmp/outputs/metrics_output/data}
+      - {name: train-cnn-lstm-category-model_output, path: /tmp/outputs/model_output/data}
+      - {name: train-cnn-lstm-category-plot_output, path: /tmp/outputs/plot_output/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "false"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--input-json", {"inputPath": "input_json"}, "--model-output",
+          {"outputPath": "model_output"}, "--metrics-output", {"outputPath": "metrics_output"},
+          "--plot-output", {"outputPath": "plot_output"}], "command": ["sh", "-ec",
+          "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def _make_parent_dirs_and_return_path(file_path:
+          str):\n    import os\n    os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return
+          file_path\n\ndef train_cnn_lstm_category(\n    input_json,\n    model_output,\n    metrics_output,\n    plot_output\n):\n    import
+          os, json\n    import numpy as np\n    import tensorflow as tf\n    import
+          matplotlib\n    matplotlib.use(''Agg'')\n    import matplotlib.pyplot as
+          plt\n    from datetime import datetime\n    from sklearn.metrics import
+          r2_score\n    from tensorflow.keras.models import Sequential\n    from tensorflow.keras.layers
+          import (\n        Dense, Flatten, Input, Conv1D, MaxPooling1D,\n        LSTM,
+          RepeatVector\n    )\n    from tensorflow.keras.callbacks import EarlyStopping,
+          ReduceLROnPlateau\n    from tensorflow.keras.metrics import RootMeanSquaredError,
+          MeanAbsolutePercentageError\n    from tensorflow.keras import backend as
+          K\n\n    os.environ[\"TF_CPP_MIN_LOG_LEVEL\"] = \"2\"\n\n    tf.random.set_seed(42)\n    np.random.seed(42)\n\n    print(\"D\u00e9but
+          de l''entra\u00eenement...\")\n\n    # --- Load data ---\n    data = np.load(input_json)\n\n    X_train
+          = data[\"X_train\"]\n    y_train = data[\"y_train\"]\n    X_val   = data[\"X_val\"]\n    y_val   =
+          data[\"y_val\"]\n    horizon = int(data[\"horizon\"])\n\n    print(f\"X_train:
+          {X_train.shape}\")\n    print(f\"y_train: {y_train.shape}\")\n    print(f\"X_val:   {X_val.shape}\")\n    print(f\"y_val:   {y_val.shape}\")\n\n    #
+          --- M\u00e9triques custom ---\n    def tolerance_accuracy(y_true, y_pred,
+          tol=0.15):\n        y_true = tf.cast(y_true, tf.float32)\n        y_pred
+          = tf.cast(y_pred, tf.float32)\n        epsilon = K.epsilon()\n        absolute_error
+          = tf.abs(y_pred - y_true)\n        relative_error = absolute_error / (tf.abs(y_true)
+          + epsilon)\n        within_tolerance = tf.less(relative_error, tol)\n        return
+          tf.reduce_mean(tf.cast(within_tolerance, tf.float32))\n\n    # --- Epoch
+          limits ---\n    EPOCH_LIMITS = {\n        ''fnn'': 60, ''cnn'': 60, ''lstm'':
+          60,\n        ''gru'': 60, ''bi-lstm'': 60, ''cnn-lstm'': 60\n    }\n\n    def
+          train_optimized_model(model, model_name, X_train, y_train, X_val, y_val,
+          batch_size=64):\n        max_epochs     = EPOCH_LIMITS.get(model_name.lower(),
+          100)\n        patience_scale = max(3, max_epochs // 20)\n\n        train_dataset
+          = tf.data.Dataset.from_tensor_slices((X_train, y_train))\n        train_dataset
+          = train_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\n        val_dataset
+          = tf.data.Dataset.from_tensor_slices((X_val, y_val))\n        val_dataset
+          = val_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\n        early_stop
+          = EarlyStopping(\n            monitor=''val_loss'',\n            patience=patience_scale,\n            restore_best_weights=True,\n            verbose=1\n        )\n        reduce_lr
+          = ReduceLROnPlateau(\n            monitor=''val_loss'',\n            factor=0.5,\n            patience=patience_scale
+          // 2,\n            min_lr=1e-6,\n            verbose=1\n        )\n\n        history
+          = model.fit(\n            train_dataset,\n            validation_data=val_dataset,\n            epochs=max_epochs,\n            callbacks=[early_stop,
+          reduce_lr],\n            verbose=2\n        )\n        return history\n\n    def
+          train_model_wrapper(model, model_name, X_train, y_train, X_val, y_val, epochs,
+          batch_size=64, optimized=True):\n        if optimized:\n            print(f\"---
+          Training {model_name.upper()} (Optimized Pipeline) ---\")\n            return
+          train_optimized_model(model, model_name, X_train, y_train, X_val, y_val,
+          batch_size)\n        else:\n            print(f\"--- Training {model_name.upper()}
+          (Standard .fit) ---\")\n            return model.fit(\n                X_train,
+          y_train,\n                validation_data=(X_val, y_val),\n                epochs=epochs,\n                batch_size=batch_size,\n                verbose=1\n            )\n\n    def
+          build_cnn_lstm_model(input_shape, output_dim):\n        model = Sequential([\n            Input(shape=input_shape),\n            Conv1D(filters=64,
+          kernel_size=3, activation=''relu''),\n            MaxPooling1D(pool_size=2),\n            Flatten(),\n            RepeatVector(1),\n            LSTM(25,
+          activation=''relu'', return_sequences=True),\n            LSTM(25, activation=''relu'',
+          return_sequences=False),\n            Dense(output_dim, activation=''linear'')\n        ])\n        model.compile(\n            optimizer=''adam'',\n            loss=''mse'',\n            metrics=[\n                ''mae'',\n                RootMeanSquaredError(name=''rmse''),\n                MeanAbsolutePercentageError(name=''mape''),\n                tolerance_accuracy\n            ]\n        )\n        return
+          model\n\n    model = build_cnn_lstm_model(\n        input_shape=(X_train.shape[1],
+          X_train.shape[2]),\n        output_dim=y_train.shape[1]\n    )\n    model.summary()\n\n    #
+          --- Entra\u00eenement ---\n    history_cnn_agg = train_model_wrapper(\n        model,
+          ''cnn-lstm'',\n        X_train, y_train, X_val, y_val,\n        epochs=60,
+          optimized=True\n    )\n\n    # --- Plots ---\n    def plot_training_history(history,
+          model_name, plot_output_path):\n        os.makedirs(plot_output_path, exist_ok=True)\n\n        fig1,
+          ax1 = plt.subplots(figsize=(3.5, 2.5))\n        ax1.plot(history.history[''loss''],     label=''Train
+          Loss'', color=''blue'', linewidth=1.2)\n        ax1.plot(history.history[''val_loss''],
+          label=''Val Loss'',   color=''red'',  linestyle=''--'', linewidth=1.2)\n        ax1.set_xlabel(''Epochs'',
+          fontsize=8)\n        ax1.set_ylabel(''Loss (MSE)'', fontsize=8)\n        ax1.tick_params(axis=''both'',
+          labelsize=8)\n        ax1.legend(fontsize=8, frameon=False)\n        ax1.grid(True,
+          linestyle='':'', alpha=0.5, color=''gray'')\n        plt.tight_layout()\n        loss_path
+          = os.path.join(plot_output_path, f''Loss_{model_name.replace(\"-\", \"_\")}.pdf'')\n        plt.savefig(loss_path,
+          format=''pdf'', bbox_inches=''tight'')\n        plt.close()\n\n        if
+          ''tolerance_accuracy'' in history.history:\n            fig2, ax2 = plt.subplots(figsize=(3.5,
+          2.5))\n            ax2.plot(history.history[''tolerance_accuracy''],     label=''Train
+          Acc'', color=''blue'', linewidth=1.2)\n            ax2.plot(history.history[''val_tolerance_accuracy''],
+          label=''Val Acc'',   color=''red'',  linestyle=''--'', linewidth=1.2)\n            ax2.set_xlabel(''Epochs'',
+          fontsize=8)\n            ax2.set_ylabel(''Tol. Accuracy'', fontsize=8)\n            ax2.tick_params(axis=''both'',
+          labelsize=8)\n            ax2.legend(fontsize=8, frameon=False)\n            ax2.grid(True,
+          linestyle='':'', alpha=0.5, color=''gray'')\n            plt.tight_layout()\n            acc_path
+          = os.path.join(plot_output_path, f''Accuracy_{model_name.replace(\"-\",
+          \"_\")}.pdf'')\n            plt.savefig(acc_path, format=''pdf'', bbox_inches=''tight'')\n            plt.close()\n\n    plots_dir
+          = os.path.join(plot_output, \"plots\")\n    os.makedirs(plots_dir, exist_ok=True)\n    plot_training_history(history_cnn_agg,
+          \"CNN_LSTM_aggregated\", plots_dir)\n\n    # --- Sauvegarde mod\u00e8le
+          ---\n\n    os.makedirs(model_output, exist_ok=True)\n    model_filename
+          = f\"cnn_lstm_model_h{horizon}.keras\"\n    model_path     = os.path.join(model_output,
+          model_filename)\n    model.save(model_path)\n    print(f\"Mod\u00e8le sauvegard\u00e9:
+          {model_path}\")\n\n    # --- Pr\u00e9dictions & M\u00e9triques ---\n    y_pred
+          = model.predict(X_val)\n\n    metrics = {\n        ''model_name'':              ''CNNLSTM'',\n        ''horizon'':                 horizon,\n        ''final_train_loss'':        float(history_cnn_agg.history[''loss''][-1]),\n        ''final_val_loss'':          float(history_cnn_agg.history[''val_loss''][-1]),\n        ''best_val_loss'':           float(min(history_cnn_agg.history[''val_loss''])),\n        ''best_epoch'':              int(np.argmin(history_cnn_agg.history[''val_loss''])),\n        ''final_val_mae'':           float(history_cnn_agg.history[''val_mae''][-1]),\n        ''final_val_rmse'':          float(history_cnn_agg.history[''val_rmse''][-1]),\n        ''final_val_mape'':          float(history_cnn_agg.history[''val_mape''][-1]),\n        ''final_val_tolerance_acc'':
+          float(history_cnn_agg.history[''val_tolerance_accuracy''][-1]),\n        ''r2_score'':                float(r2_score(y_val.flatten(),
+          y_pred.flatten())),\n        ''epochs_trained'':          len(history_cnn_agg.history[''loss'']),\n        ''training_completed'':      datetime.now().isoformat()\n    }\n\n    os.makedirs(os.path.dirname(metrics_output),
+          exist_ok=True)\n    with open(metrics_output, ''w'') as f:\n        json.dump(metrics,
+          f, indent=2)\n\n    print(\"\\n--- M\u00e9triques finales ---\")\n    for
+          key, value in metrics.items():\n        print(f\"{key}: {value}\")\n\n    print(\"Entra\u00eenement
+          termin\u00e9 avec succ\u00e8s !\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Train
+          cnn lstm category'', description='''')\n_parser.add_argument(\"--input-json\",
+          dest=\"input_json\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-output\",
+          dest=\"model_output\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parser.add_argument(\"--metrics-output\", dest=\"metrics_output\",
+          type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\",
+          dest=\"plot_output\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = train_cnn_lstm_category(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "input_json"}], "name": "Train cnn lstm category", "outputs":
+          [{"name": "model_output"}, {"name": "metrics_output"}, {"name": "plot_output"}]}',
+        pipelines.kubeflow.org/component_ref: '{}'}
+  - name: train-fnn-category
+    container:
+      args: [--input-json, /tmp/inputs/input_json/data, --model-output, /tmp/outputs/model_output/data,
+        --metrics-output, /tmp/outputs/metrics_output/data, --plot-output, /tmp/outputs/plot_output/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef train_fnn_category(\n    input_json,\n    model_output,\n    metrics_output,\n\
+        \    plot_output\n):\n    import os, json\n    import numpy as np\n    import\
+        \ tensorflow as tf\n    import matplotlib\n    matplotlib.use('Agg')\n   \
+        \ import matplotlib.pyplot as plt\n    from datetime import datetime\n   \
+        \ from sklearn.metrics import r2_score\n    from tensorflow.keras.models import\
+        \ Sequential\n    from tensorflow.keras.layers import Dense, Flatten, Input\n\
+        \    from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau\n\
+        \    from tensorflow.keras.metrics import RootMeanSquaredError\n    from tensorflow.keras\
+        \ import backend as K\n\n    os.environ[\"TF_CPP_MIN_LOG_LEVEL\"] = \"2\"\n\
+        \n    tf.random.set_seed(42)\n    np.random.seed(42)\n\n    print(\"D\xE9\
+        but de l'entra\xEEnement...\")\n\n    # --- Load data info ---\n    data =\
+        \ np.load(input_json)\n\n    X_train = data[\"X_train\"]\n    y_train = data[\"\
+        y_train\"]\n    X_val = data[\"X_val\"]\n    y_val = data[\"y_val\"]\n   \
+        \ horizon = int(data[\"horizon\"])\n\n    print(f\"X_train: {X_train.shape}\"\
+        )\n    print(f\"y_train: {y_train.shape}\")\n    print(f\"X_val: {X_val.shape}\"\
+        )\n    print(f\"y_val: {y_val.shape}\")\n\n    # --- D\xE9finir les m\xE9\
+        triques ---\n    def tolerance_accuracy(y_true, y_pred, tol=0.15):\n     \
+        \   \"\"\"\n        Calculates the percentage of predictions that fall within\
+        \ a (tol) tolerance\n        of the actual values.\n        \"\"\"\n     \
+        \   y_true = tf.cast(y_true, tf.float32)\n        y_pred = tf.cast(y_pred,\
+        \ tf.float32)\n\n        epsilon = K.epsilon()\n\n        absolute_error =\
+        \ tf.abs(y_pred - y_true)\n        relative_error = absolute_error / (tf.abs(y_true)\
+        \ + epsilon)\n\n        within_tolerance = tf.less(relative_error, tol)\n\
+        \        accuracy = tf.reduce_mean(tf.cast(within_tolerance, tf.float32))\n\
+        \n        return accuracy\n\n    # --- Configuration des epochs ---\n    EPOCH_LIMITS\
+        \ = {\n        'fnn': 60,\n        'cnn': 60,\n        'lstm': 60,\n     \
+        \   'gru': 60,\n        'bi-lstm': 60,\n        'cnn-lstm': 60\n    }\n\n\
+        \    def train_optimized_model(model, model_name, X_train, y_train, X_val,\
+        \ y_val, batch_size=64):\n        \"\"\"\n        Trains a model using tf.data\
+        \ pipelines, dynamic learning rates, and early stopping.\n        Enforces\
+        \ the maximum epochs defined in the reference paper.\n        \"\"\"\n   \
+        \     max_epochs = EPOCH_LIMITS.get(model_name.lower(), 100)\n\n        #\
+        \ Calculate a dynamic patience scale (20% of max epochs, minimum of 3)\n \
+        \       patience_scale = max(3, max_epochs // 20)\n\n        # Build High-Speed\
+        \ tf.data Pipelines\n        # .cache() keeps data in memory, .prefetch()\
+        \ loads next batch while GPU trains\n        train_dataset = tf.data.Dataset.from_tensor_slices((X_train,\
+        \ y_train))\n        train_dataset = train_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\
+        \n        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))\n\
+        \        val_dataset = val_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\
+        \n        # Configure Callbacks\n        early_stop = EarlyStopping(\n   \
+        \         monitor='val_loss',\n            patience=patience_scale,      \
+        \ # Wait dynamically based on model\n            restore_best_weights=True,\
+        \     # Revert to the best epoch automatically\n            verbose=1\n  \
+        \      )\n\n        reduce_lr = ReduceLROnPlateau(\n            monitor='val_loss',\n\
+        \            factor=0.5,                    # Cut learning rate in half if\
+        \ plateaued\n            patience=patience_scale // 2,  # Trigger LR reduction\
+        \ before Early Stopping kicks in\n            min_lr=1e-6,\n            verbose=1\n\
+        \        )\n\n        # Train the Model using the pipeline\n        history\
+        \ = model.fit(\n            train_dataset,\n            validation_data=val_dataset,\n\
+        \            epochs=max_epochs,\n            callbacks=[early_stop, reduce_lr],\n\
+        \            verbose=2 # Cleaner console output for hundreds of epochs\n \
+        \       )\n\n        return history\n\n    def train_model_wrapper(model,\
+        \ model_name, X_train, y_train, X_val, y_val, epochs, batch_size=64, optimized=True):\n\
+        \        \"\"\"\n        Toggles between standard Keras .fit() and the optimized\
+        \ tf.data pipeline.\n        \"\"\"\n        if optimized:\n            print(f\"\
+        --- Training {model_name.upper()} (Optimized Pipeline) ---\")\n          \
+        \  history = train_optimized_model(\n                model=model,\n      \
+        \          model_name=model_name,\n                X_train=X_train,\n    \
+        \            y_train=y_train,\n                X_val=X_val,\n            \
+        \    y_val=y_val,\n                batch_size=batch_size\n            )\n\
+        \        else:\n            print(f\"--- Training {model_name.upper()} (Standard\
+        \ .fit) ---\")\n            history = model.fit(\n                X_train,\
+        \ y_train,\n                validation_data=(X_val, y_val),\n            \
+        \    epochs=epochs,\n                batch_size=batch_size,\n            \
+        \    verbose=1\n            )\n        return history\n\n    # --- Construction\
+        \ du mod\xE8le FNN ---\n    def build_fnn_model(input_shape, output_dim):\n\
+        \        model = Sequential()\n        model.add(Input(shape=input_shape))\n\
+        \        model.add(Flatten())\n\n        # First layer (25 units)\n      \
+        \  model.add(Dense(25, activation='relu'))\n\n        # Second layer (25 units)\n\
+        \        model.add(Dense(25, activation='relu'))\n\n        # output layer\n\
+        \        model.add(Dense(output_dim, activation='linear'))\n\n        model.compile(\n\
+        \            optimizer='adam',\n            loss='mse',\n            metrics=[\n\
+        \                'mae',\n                RootMeanSquaredError(name='rmse'),\n\
+        \                tolerance_accuracy\n            ]\n        )\n        return\
+        \ model\n\n    model = build_fnn_model(\n        input_shape=(X_train.shape[1],\
+        \ X_train.shape[2]),\n        output_dim=y_train.shape[1]\n    )\n\n    #\
+        \ Afficher le r\xE9sum\xE9\n    model.summary()\n\n    # --- Entra\xEEnement\
+        \ ---\n\n    history_fnn_agg = train_model_wrapper(model, 'fnn', X_train,\
+        \ y_train, X_val, y_val, epochs=60, optimized=True)\n\n    # --- Visualisation\
+        \ ---\n    def plot_training_history(history, model_name, plot_output_path):\n\
+        \        \"\"\"\n        Plots the training and validation Loss and Tolerance\
+        \ Accuracy in separate figures\n        \"\"\"\n        # Plot Loss (MSE)\n\
+        \        os.makedirs(plot_output_path, exist_ok=True)\n        fig1, ax1 =\
+        \ plt.subplots(figsize=(3.5, 2.5))\n\n        ax1.plot(history.history['loss'],\
+        \ label='Train Loss', color='blue', linewidth=1.2)\n        ax1.plot(history.history['val_loss'],\
+        \ label='Val Loss', color='red', linestyle='--', linewidth=1.2)\n\n      \
+        \  ax1.set_xlabel('Epochs', fontsize=8)\n        ax1.set_ylabel('Loss (MSE)',\
+        \ fontsize=8)\n        ax1.tick_params(axis='both', labelsize=8)\n       \
+        \ ax1.legend(fontsize=8, frameon=False)\n        ax1.grid(True, linestyle=':',\
+        \ alpha=0.5, color='gray')\n\n        plt.tight_layout()\n        loss_plot_path\
+        \ = os.path.join(plot_output_path, f'Loss_{model_name.replace(\"-\", \"_\"\
+        )}.pdf')\n        plt.savefig(loss_plot_path, format='pdf', bbox_inches='tight')\n\
+        \        plt.close()\n\n        # Plot Custom Metric (Tolerance Accuracy)\n\
+        \        fig2, ax2 = plt.subplots(figsize=(3.5, 2.5))\n\n        if 'tolerance_accuracy'\
+        \ in history.history:\n            ax2.plot(history.history['tolerance_accuracy'],\
+        \ label='Train Acc', color='blue', linewidth=1.2)\n            ax2.plot(history.history['val_tolerance_accuracy'],\
+        \ label='Val Acc', color='red', linestyle='--', linewidth=1.2)\n\n       \
+        \     ax2.set_xlabel('Epochs', fontsize=8)\n            ax2.set_ylabel('Tol.\
+        \ Accuracy', fontsize=8)\n            ax2.tick_params(axis='both', labelsize=8)\n\
+        \            ax2.legend(fontsize=8, frameon=False)\n            ax2.grid(True,\
+        \ linestyle=':', alpha=0.5, color='gray')\n\n            plt.tight_layout()\n\
+        \            acc_plot_path = os.path.join(plot_output_path, f'Accuracy_{model_name.replace(\"\
+        -\", \"_\")}.pdf')\n            plt.savefig(acc_plot_path, format='pdf', bbox_inches='tight')\n\
+        \            plt.close()\n\n    # Sauvegarder les plots\n    plots_dir = os.path.join(plot_output,\
+        \ \"plots\")\n    plot_training_history(history_fnn_agg, \"FNN_Model_aggregated\"\
+        , plots_dir)\n\n    os.makedirs(model_output, exist_ok=True)\n\n    model_filename\
+        \ = f\"fnn_model_h{horizon}.keras\"\n    model_path = os.path.join(model_output,\
+        \ model_filename)\n\n    model.save(model_path)\n\n    print(f\" Mod\xE8le\
+        \ sauvegard\xE9: {model_path}\")\n\n    # --- Pr\xE9dictions ---\n    y_pred\
+        \ = model.predict(X_val)\n\n    # --- M\xE9triques ---\n    metrics = {\n\
+        \        'model_name': 'FNN',\n        'horizon': horizon,\n        'final_train_loss':\
+        \ float(history_fnn_agg.history['loss'][-1]),\n        'final_val_loss': float(history_fnn_agg.history['val_loss'][-1]),\n\
+        \        'best_val_loss': float(min(history_fnn_agg.history['val_loss'])),\n\
+        \        'best_epoch': int(np.argmin(history_fnn_agg.history['val_loss'])),\n\
+        \        'final_val_mae': float(history_fnn_agg.history['val_mae'][-1]),\n\
+        \        'final_val_rmse': float(history_fnn_agg.history['val_rmse'][-1]),\n\
+        \        'final_val_tolerance_acc': float(history_fnn_agg.history['val_tolerance_accuracy'][-1]),\n\
+        \        'r2_score': float(r2_score(y_val.flatten(), y_pred.flatten())),\n\
+        \        'epochs_trained': len(history_fnn_agg.history['loss']),\n       \
+        \ 'training_completed': datetime.now().isoformat()\n    }\n\n    # --- Sauvegarde\
+        \ metrics ---\n    with open(metrics_output, 'w') as f:\n        json.dump(metrics,\
+        \ f, indent=2)\n\n    print(\"\\n --- M\xE9triques finales ---\")\n    for\
+        \ key, value in metrics.items():\n        print(f\"{key}: {value}\")\n\n \
+        \   print(\" Entra\xEEnement termin\xE9 avec succ\xE8s !\")\n\nimport argparse\n\
+        _parser = argparse.ArgumentParser(prog='Train fnn category', description='')\n\
+        _parser.add_argument(\"--input-json\", dest=\"input_json\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-output\", dest=\"\
+        model_output\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--metrics-output\", dest=\"metrics_output\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\"\
+        , dest=\"plot_output\", type=_make_parent_dirs_and_return_path, required=True,\
+        \ default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n\
+        _outputs = train_fnn_category(**_parsed_args)\n"
+      image: tibermac/mlops-pipeline:latest
+    inputs:
+      artifacts:
+      - {name: preprocess-output, path: /tmp/inputs/input_json/data}
+    outputs:
+      artifacts:
+      - {name: train-fnn-category-metrics_output, path: /tmp/outputs/metrics_output/data}
+      - {name: train-fnn-category-model_output, path: /tmp/outputs/model_output/data}
+      - {name: train-fnn-category-plot_output, path: /tmp/outputs/plot_output/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "false"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--input-json", {"inputPath": "input_json"}, "--model-output",
+          {"outputPath": "model_output"}, "--metrics-output", {"outputPath": "metrics_output"},
+          "--plot-output", {"outputPath": "plot_output"}], "command": ["sh", "-ec",
+          "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def _make_parent_dirs_and_return_path(file_path:
+          str):\n    import os\n    os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return
+          file_path\n\ndef train_fnn_category(\n    input_json,\n    model_output,\n    metrics_output,\n    plot_output\n):\n    import
+          os, json\n    import numpy as np\n    import tensorflow as tf\n    import
+          matplotlib\n    matplotlib.use(''Agg'')\n    import matplotlib.pyplot as
+          plt\n    from datetime import datetime\n    from sklearn.metrics import
+          r2_score\n    from tensorflow.keras.models import Sequential\n    from tensorflow.keras.layers
+          import Dense, Flatten, Input\n    from tensorflow.keras.callbacks import
+          EarlyStopping, ReduceLROnPlateau\n    from tensorflow.keras.metrics import
+          RootMeanSquaredError\n    from tensorflow.keras import backend as K\n\n    os.environ[\"TF_CPP_MIN_LOG_LEVEL\"]
+          = \"2\"\n\n    tf.random.set_seed(42)\n    np.random.seed(42)\n\n    print(\"D\u00e9but
+          de l''entra\u00eenement...\")\n\n    # --- Load data info ---\n    data
+          = np.load(input_json)\n\n    X_train = data[\"X_train\"]\n    y_train =
+          data[\"y_train\"]\n    X_val = data[\"X_val\"]\n    y_val = data[\"y_val\"]\n    horizon
+          = int(data[\"horizon\"])\n\n    print(f\"X_train: {X_train.shape}\")\n    print(f\"y_train:
+          {y_train.shape}\")\n    print(f\"X_val: {X_val.shape}\")\n    print(f\"y_val:
+          {y_val.shape}\")\n\n    # --- D\u00e9finir les m\u00e9triques ---\n    def
+          tolerance_accuracy(y_true, y_pred, tol=0.15):\n        \"\"\"\n        Calculates
+          the percentage of predictions that fall within a (tol) tolerance\n        of
+          the actual values.\n        \"\"\"\n        y_true = tf.cast(y_true, tf.float32)\n        y_pred
+          = tf.cast(y_pred, tf.float32)\n\n        epsilon = K.epsilon()\n\n        absolute_error
+          = tf.abs(y_pred - y_true)\n        relative_error = absolute_error / (tf.abs(y_true)
+          + epsilon)\n\n        within_tolerance = tf.less(relative_error, tol)\n        accuracy
+          = tf.reduce_mean(tf.cast(within_tolerance, tf.float32))\n\n        return
+          accuracy\n\n    # --- Configuration des epochs ---\n    EPOCH_LIMITS = {\n        ''fnn'':
+          60,\n        ''cnn'': 60,\n        ''lstm'': 60,\n        ''gru'': 60,\n        ''bi-lstm'':
+          60,\n        ''cnn-lstm'': 60\n    }\n\n    def train_optimized_model(model,
+          model_name, X_train, y_train, X_val, y_val, batch_size=64):\n        \"\"\"\n        Trains
+          a model using tf.data pipelines, dynamic learning rates, and early stopping.\n        Enforces
+          the maximum epochs defined in the reference paper.\n        \"\"\"\n        max_epochs
+          = EPOCH_LIMITS.get(model_name.lower(), 100)\n\n        # Calculate a dynamic
+          patience scale (20% of max epochs, minimum of 3)\n        patience_scale
+          = max(3, max_epochs // 20)\n\n        # Build High-Speed tf.data Pipelines\n        #
+          .cache() keeps data in memory, .prefetch() loads next batch while GPU trains\n        train_dataset
+          = tf.data.Dataset.from_tensor_slices((X_train, y_train))\n        train_dataset
+          = train_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\n        val_dataset
+          = tf.data.Dataset.from_tensor_slices((X_val, y_val))\n        val_dataset
+          = val_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)\n\n        #
+          Configure Callbacks\n        early_stop = EarlyStopping(\n            monitor=''val_loss'',\n            patience=patience_scale,       #
+          Wait dynamically based on model\n            restore_best_weights=True,     #
+          Revert to the best epoch automatically\n            verbose=1\n        )\n\n        reduce_lr
+          = ReduceLROnPlateau(\n            monitor=''val_loss'',\n            factor=0.5,                    #
+          Cut learning rate in half if plateaued\n            patience=patience_scale
+          // 2,  # Trigger LR reduction before Early Stopping kicks in\n            min_lr=1e-6,\n            verbose=1\n        )\n\n        #
+          Train the Model using the pipeline\n        history = model.fit(\n            train_dataset,\n            validation_data=val_dataset,\n            epochs=max_epochs,\n            callbacks=[early_stop,
+          reduce_lr],\n            verbose=2 # Cleaner console output for hundreds
+          of epochs\n        )\n\n        return history\n\n    def train_model_wrapper(model,
+          model_name, X_train, y_train, X_val, y_val, epochs, batch_size=64, optimized=True):\n        \"\"\"\n        Toggles
+          between standard Keras .fit() and the optimized tf.data pipeline.\n        \"\"\"\n        if
+          optimized:\n            print(f\"--- Training {model_name.upper()} (Optimized
+          Pipeline) ---\")\n            history = train_optimized_model(\n                model=model,\n                model_name=model_name,\n                X_train=X_train,\n                y_train=y_train,\n                X_val=X_val,\n                y_val=y_val,\n                batch_size=batch_size\n            )\n        else:\n            print(f\"---
+          Training {model_name.upper()} (Standard .fit) ---\")\n            history
+          = model.fit(\n                X_train, y_train,\n                validation_data=(X_val,
+          y_val),\n                epochs=epochs,\n                batch_size=batch_size,\n                verbose=1\n            )\n        return
+          history\n\n    # --- Construction du mod\u00e8le FNN ---\n    def build_fnn_model(input_shape,
+          output_dim):\n        model = Sequential()\n        model.add(Input(shape=input_shape))\n        model.add(Flatten())\n\n        #
+          First layer (25 units)\n        model.add(Dense(25, activation=''relu''))\n\n        #
+          Second layer (25 units)\n        model.add(Dense(25, activation=''relu''))\n\n        #
+          output layer\n        model.add(Dense(output_dim, activation=''linear''))\n\n        model.compile(\n            optimizer=''adam'',\n            loss=''mse'',\n            metrics=[\n                ''mae'',\n                RootMeanSquaredError(name=''rmse''),\n                tolerance_accuracy\n            ]\n        )\n        return
+          model\n\n    model = build_fnn_model(\n        input_shape=(X_train.shape[1],
+          X_train.shape[2]),\n        output_dim=y_train.shape[1]\n    )\n\n    #
+          Afficher le r\u00e9sum\u00e9\n    model.summary()\n\n    # --- Entra\u00eenement
+          ---\n\n    history_fnn_agg = train_model_wrapper(model, ''fnn'', X_train,
+          y_train, X_val, y_val, epochs=60, optimized=True)\n\n    # --- Visualisation
+          ---\n    def plot_training_history(history, model_name, plot_output_path):\n        \"\"\"\n        Plots
+          the training and validation Loss and Tolerance Accuracy in separate figures\n        \"\"\"\n        #
+          Plot Loss (MSE)\n        os.makedirs(plot_output_path, exist_ok=True)\n        fig1,
+          ax1 = plt.subplots(figsize=(3.5, 2.5))\n\n        ax1.plot(history.history[''loss''],
+          label=''Train Loss'', color=''blue'', linewidth=1.2)\n        ax1.plot(history.history[''val_loss''],
+          label=''Val Loss'', color=''red'', linestyle=''--'', linewidth=1.2)\n\n        ax1.set_xlabel(''Epochs'',
+          fontsize=8)\n        ax1.set_ylabel(''Loss (MSE)'', fontsize=8)\n        ax1.tick_params(axis=''both'',
+          labelsize=8)\n        ax1.legend(fontsize=8, frameon=False)\n        ax1.grid(True,
+          linestyle='':'', alpha=0.5, color=''gray'')\n\n        plt.tight_layout()\n        loss_plot_path
+          = os.path.join(plot_output_path, f''Loss_{model_name.replace(\"-\", \"_\")}.pdf'')\n        plt.savefig(loss_plot_path,
+          format=''pdf'', bbox_inches=''tight'')\n        plt.close()\n\n        #
+          Plot Custom Metric (Tolerance Accuracy)\n        fig2, ax2 = plt.subplots(figsize=(3.5,
+          2.5))\n\n        if ''tolerance_accuracy'' in history.history:\n            ax2.plot(history.history[''tolerance_accuracy''],
+          label=''Train Acc'', color=''blue'', linewidth=1.2)\n            ax2.plot(history.history[''val_tolerance_accuracy''],
+          label=''Val Acc'', color=''red'', linestyle=''--'', linewidth=1.2)\n\n            ax2.set_xlabel(''Epochs'',
+          fontsize=8)\n            ax2.set_ylabel(''Tol. Accuracy'', fontsize=8)\n            ax2.tick_params(axis=''both'',
+          labelsize=8)\n            ax2.legend(fontsize=8, frameon=False)\n            ax2.grid(True,
+          linestyle='':'', alpha=0.5, color=''gray'')\n\n            plt.tight_layout()\n            acc_plot_path
+          = os.path.join(plot_output_path, f''Accuracy_{model_name.replace(\"-\",
+          \"_\")}.pdf'')\n            plt.savefig(acc_plot_path, format=''pdf'', bbox_inches=''tight'')\n            plt.close()\n\n    #
+          Sauvegarder les plots\n    plots_dir = os.path.join(plot_output, \"plots\")\n    plot_training_history(history_fnn_agg,
+          \"FNN_Model_aggregated\", plots_dir)\n\n    os.makedirs(model_output, exist_ok=True)\n\n    model_filename
+          = f\"fnn_model_h{horizon}.keras\"\n    model_path = os.path.join(model_output,
+          model_filename)\n\n    model.save(model_path)\n\n    print(f\" Mod\u00e8le
+          sauvegard\u00e9: {model_path}\")\n\n    # --- Pr\u00e9dictions ---\n    y_pred
+          = model.predict(X_val)\n\n    # --- M\u00e9triques ---\n    metrics = {\n        ''model_name'':
+          ''FNN'',\n        ''horizon'': horizon,\n        ''final_train_loss'': float(history_fnn_agg.history[''loss''][-1]),\n        ''final_val_loss'':
+          float(history_fnn_agg.history[''val_loss''][-1]),\n        ''best_val_loss'':
+          float(min(history_fnn_agg.history[''val_loss''])),\n        ''best_epoch'':
+          int(np.argmin(history_fnn_agg.history[''val_loss''])),\n        ''final_val_mae'':
+          float(history_fnn_agg.history[''val_mae''][-1]),\n        ''final_val_rmse'':
+          float(history_fnn_agg.history[''val_rmse''][-1]),\n        ''final_val_tolerance_acc'':
+          float(history_fnn_agg.history[''val_tolerance_accuracy''][-1]),\n        ''r2_score'':
+          float(r2_score(y_val.flatten(), y_pred.flatten())),\n        ''epochs_trained'':
+          len(history_fnn_agg.history[''loss'']),\n        ''training_completed'':
+          datetime.now().isoformat()\n    }\n\n    # --- Sauvegarde metrics ---\n    with
+          open(metrics_output, ''w'') as f:\n        json.dump(metrics, f, indent=2)\n\n    print(\"\\n
+          --- M\u00e9triques finales ---\")\n    for key, value in metrics.items():\n        print(f\"{key}:
+          {value}\")\n\n    print(\" Entra\u00eenement termin\u00e9 avec succ\u00e8s
+          !\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Train
+          fnn category'', description='''')\n_parser.add_argument(\"--input-json\",
+          dest=\"input_json\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-output\",
+          dest=\"model_output\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parser.add_argument(\"--metrics-output\", dest=\"metrics_output\",
+          type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--plot-output\",
+          dest=\"plot_output\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = train_fnn_category(**_parsed_args)\n"], "image": "tibermac/mlops-pipeline:latest"}},
+          "inputs": [{"name": "input_json", "type": "String"}], "name": "Train fnn
+          category", "outputs": [{"name": "model_output", "type": "String"}, {"name":
+          "metrics_output", "type": "String"}, {"name": "plot_output", "type": "String"}]}',
+        pipelines.kubeflow.org/component_ref: '{}'}
+  arguments:
+    parameters:
+    - {name: bucket, value: csv-data}
+  serviceAccountName: pipeline-runner

@@ -1,0 +1,218 @@
+from kfp.components import InputPath, OutputPath
+
+def train_cnn_lstm_category(
+    input_json: InputPath(),
+    model_output: OutputPath(),
+    metrics_output: OutputPath(),
+    plot_output: OutputPath()
+):
+    import os, json
+    import numpy as np
+    import tensorflow as tf
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from datetime import datetime
+    from sklearn.metrics import r2_score
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import (
+        Dense, Flatten, Input, Conv1D, MaxPooling1D,
+        LSTM, RepeatVector
+    )
+    from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+    from tensorflow.keras.metrics import RootMeanSquaredError, MeanAbsolutePercentageError
+    from tensorflow.keras import backend as K
+
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+    tf.random.set_seed(42)
+    np.random.seed(42)
+
+    print("Début de l'entraînement...")
+
+    # --- Load data ---
+    data = np.load(input_json)
+
+    X_train = data["X_train"]
+    y_train = data["y_train"]
+    X_val   = data["X_val"]
+    y_val   = data["y_val"]
+    horizon = int(data["horizon"])
+
+    print(f"X_train: {X_train.shape}")
+    print(f"y_train: {y_train.shape}")
+    print(f"X_val:   {X_val.shape}")
+    print(f"y_val:   {y_val.shape}")
+
+    # --- Métriques custom ---
+    def tolerance_accuracy(y_true, y_pred, tol=0.15):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        epsilon = K.epsilon()
+        absolute_error = tf.abs(y_pred - y_true)
+        relative_error = absolute_error / (tf.abs(y_true) + epsilon)
+        within_tolerance = tf.less(relative_error, tol)
+        return tf.reduce_mean(tf.cast(within_tolerance, tf.float32))
+
+    # --- Epoch limits ---
+    EPOCH_LIMITS = {
+        'fnn': 60, 'cnn': 60, 'lstm': 60,
+        'gru': 60, 'bi-lstm': 60, 'cnn-lstm': 60
+    }
+
+    def train_optimized_model(model, model_name, X_train, y_train, X_val, y_val, batch_size=64):
+        max_epochs     = EPOCH_LIMITS.get(model_name.lower(), 100)
+        patience_scale = max(3, max_epochs // 20)
+
+        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+        train_dataset = train_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
+        val_dataset = val_dataset.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+        early_stop = EarlyStopping(
+            monitor='val_loss',
+            patience=patience_scale,
+            restore_best_weights=True,
+            verbose=1
+        )
+        reduce_lr = ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.5,
+            patience=patience_scale // 2,
+            min_lr=1e-6,
+            verbose=1
+        )
+
+        history = model.fit(
+            train_dataset,
+            validation_data=val_dataset,
+            epochs=max_epochs,
+            callbacks=[early_stop, reduce_lr],
+            verbose=2
+        )
+        return history
+
+    def train_model_wrapper(model, model_name, X_train, y_train, X_val, y_val, epochs, batch_size=64, optimized=True):
+        if optimized:
+            print(f"--- Training {model_name.upper()} (Optimized Pipeline) ---")
+            return train_optimized_model(model, model_name, X_train, y_train, X_val, y_val, batch_size)
+        else:
+            print(f"--- Training {model_name.upper()} (Standard .fit) ---")
+            return model.fit(
+                X_train, y_train,
+                validation_data=(X_val, y_val),
+                epochs=epochs,
+                batch_size=batch_size,
+                verbose=1
+            )
+
+    def build_cnn_lstm_model(input_shape, output_dim):
+        model = Sequential([
+            Input(shape=input_shape),
+            Conv1D(filters=64, kernel_size=3, activation='relu'),
+            MaxPooling1D(pool_size=2),
+            Flatten(),
+            RepeatVector(1),
+            LSTM(25, activation='relu', return_sequences=True),
+            LSTM(25, activation='relu', return_sequences=False),
+            Dense(output_dim, activation='linear')
+        ])
+        model.compile(
+            optimizer='adam',
+            loss='mse',
+            metrics=[
+                'mae',
+                RootMeanSquaredError(name='rmse'),
+                MeanAbsolutePercentageError(name='mape'),
+                tolerance_accuracy
+            ]
+        )
+        return model
+
+    model = build_cnn_lstm_model(
+        input_shape=(X_train.shape[1], X_train.shape[2]),
+        output_dim=y_train.shape[1]
+    )
+    model.summary()
+
+    # --- Entraînement ---
+    history_cnn_agg = train_model_wrapper(
+        model, 'cnn-lstm',
+        X_train, y_train, X_val, y_val,
+        epochs=60, optimized=True
+    )
+
+    # --- Plots ---
+    def plot_training_history(history, model_name, plot_output_path):
+        os.makedirs(plot_output_path, exist_ok=True)
+
+        fig1, ax1 = plt.subplots(figsize=(3.5, 2.5))
+        ax1.plot(history.history['loss'],     label='Train Loss', color='blue', linewidth=1.2)
+        ax1.plot(history.history['val_loss'], label='Val Loss',   color='red',  linestyle='--', linewidth=1.2)
+        ax1.set_xlabel('Epochs', fontsize=8)
+        ax1.set_ylabel('Loss (MSE)', fontsize=8)
+        ax1.tick_params(axis='both', labelsize=8)
+        ax1.legend(fontsize=8, frameon=False)
+        ax1.grid(True, linestyle=':', alpha=0.5, color='gray')
+        plt.tight_layout()
+        loss_path = os.path.join(plot_output_path, f'Loss_{model_name.replace("-", "_")}.pdf')
+        plt.savefig(loss_path, format='pdf', bbox_inches='tight')
+        plt.close()
+
+        if 'tolerance_accuracy' in history.history:
+            fig2, ax2 = plt.subplots(figsize=(3.5, 2.5))
+            ax2.plot(history.history['tolerance_accuracy'],     label='Train Acc', color='blue', linewidth=1.2)
+            ax2.plot(history.history['val_tolerance_accuracy'], label='Val Acc',   color='red',  linestyle='--', linewidth=1.2)
+            ax2.set_xlabel('Epochs', fontsize=8)
+            ax2.set_ylabel('Tol. Accuracy', fontsize=8)
+            ax2.tick_params(axis='both', labelsize=8)
+            ax2.legend(fontsize=8, frameon=False)
+            ax2.grid(True, linestyle=':', alpha=0.5, color='gray')
+            plt.tight_layout()
+            acc_path = os.path.join(plot_output_path, f'Accuracy_{model_name.replace("-", "_")}.pdf')
+            plt.savefig(acc_path, format='pdf', bbox_inches='tight')
+            plt.close()
+
+    
+    plots_dir = os.path.join(plot_output, "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+    plot_training_history(history_cnn_agg, "CNN_LSTM_aggregated", plots_dir)
+
+    # --- Sauvegarde modèle ---
+    
+    os.makedirs(model_output, exist_ok=True)
+    model_filename = f"cnn_lstm_model_h{horizon}.keras"
+    model_path     = os.path.join(model_output, model_filename)
+    model.save(model_path)
+    print(f"Modèle sauvegardé: {model_path}")
+
+    # --- Prédictions & Métriques ---
+    y_pred = model.predict(X_val)
+
+    metrics = {
+        'model_name':              'CNNLSTM',
+        'horizon':                 horizon,
+        'final_train_loss':        float(history_cnn_agg.history['loss'][-1]),
+        'final_val_loss':          float(history_cnn_agg.history['val_loss'][-1]),
+        'best_val_loss':           float(min(history_cnn_agg.history['val_loss'])),
+        'best_epoch':              int(np.argmin(history_cnn_agg.history['val_loss'])),
+        'final_val_mae':           float(history_cnn_agg.history['val_mae'][-1]),
+        'final_val_rmse':          float(history_cnn_agg.history['val_rmse'][-1]),
+        'final_val_mape':          float(history_cnn_agg.history['val_mape'][-1]),
+        'final_val_tolerance_acc': float(history_cnn_agg.history['val_tolerance_accuracy'][-1]),
+        'r2_score':                float(r2_score(y_val.flatten(), y_pred.flatten())),
+        'epochs_trained':          len(history_cnn_agg.history['loss']),
+        'training_completed':      datetime.now().isoformat()
+    }
+
+   
+    os.makedirs(os.path.dirname(metrics_output), exist_ok=True)
+    with open(metrics_output, 'w') as f:
+        json.dump(metrics, f, indent=2)
+
+    print("\n--- Métriques finales ---")
+    for key, value in metrics.items():
+        print(f"{key}: {value}")
+
+    print("Entraînement terminé avec succès !")
