@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-consumer
+  template:
+    metadata:
+      labels:
+        app: data-consumer
+    spec:
+      containers:
+      - name: consumer
+        image: data-consumer:v1
+        imagePullPolicy: Never
+        env:
+        # Kafka broker connection string
+        - name: KAFKA_BOOTSTRAP_SERVER
+          value: "demo-kafka-bootstrap.slicescope.svc.cluster.local:9082"
+        # InfluxDB connection string
+        - name: INFLUX_HOST
+          value: "influxdb-service.slicescope.svc.cluster.local"
+        - name: INFLUX_PORT
+          value: "9084"
+

@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payload-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payload-server
+  template:
+    metadata:
+      labels:
+        app: payload-server
+    spec:
+      volumes:
+      # Ephemeral volume shared between init container and main web server
+      - name: web-content
+        emptyDir: {}
+      
+      initContainers:
+      - name: generate-files
+        image: alpine:latest
+        command: ["/bin/sh", "-c"]
+        # Generate synthetic zero-byte files used by User Pods to emulate network load
+        args:
+          - |
+            dd if=/dev/zero of=/data/100MB.zip bs=1M count=100;
+            dd if=/dev/zero of=/data/100KB.zip bs=1K count=100;
+        volumeMounts:
+        - name: web-content
+          mountPath: /data
+
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        # Nginx natively listens on port 80 internally
+        - containerPort: 80
+        volumeMounts:
+        - name: web-content
+          mountPath: /usr/share/nginx/html
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payload-server-service
+spec:
+  ports:
+  # 9080 is the base port for custom microservices in the cluster
+  - port: 9080
+    # Map external 9080 requests to internal Nginx 80
+    targetPort: 80
+  selector:
+    app: payload-server
+

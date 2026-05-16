@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: env-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: env-controller
+  template:
+    metadata:
+      labels:
+        app: env-controller
+    spec:
+      containers:
+      - name: controller
+        image: env-controller:v1 
+        imagePullPolicy: Never
+        command: ["uvicorn", "env_controller:app", "--host", "0.0.0.0", "--port", "8000"]
+        ports:
+        - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: env-controller-service
+spec:
+  ports:
+  - port: 9081
+    targetPort: 8000
+  selector:
+    app: env-controller
+

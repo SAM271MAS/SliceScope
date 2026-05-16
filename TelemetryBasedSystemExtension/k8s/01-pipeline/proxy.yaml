@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: squid-config
+data:
+  squid.conf: |
+    # Standard Squid proxy port
+    http_port 3128
+    
+    # Permit traffic to the internal payload service
+    acl Safe_ports port 9080
+    
+    # Allow ingress from all Kubernetes pods
+    http_access allow all
+    
+    # Disable caching entirely
+    # Forces Squid to act as a pure pass-through router so 100% 
+    # of requests generate a network load and a TCP_MISS log
+    cache deny all
+    
+    # Preserve URL query parameters (For extracting embedded ml_feature telemetry)
+    strip_query_terms off
+    
+    # Route access logs to shared volume
+    access_log stdio:/var/log/squid/access.log squid
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: squid-proxy
+  template:
+    metadata:
+      labels:
+        app: squid-proxy
+    spec:
+      volumes:
+      # Shared volume for log interception between proxy and producer containers
+      - name: shared-logs
+        emptyDir: {}
+      - name: squid-config-volume
+        configMap:
+          name: squid-config
+
+      containers:
+      # Proxy Container: Intercepts network traffic and writes to access.log
+      - name: squid
+        image: ubuntu/squid:latest
+        ports:
+        - containerPort: 3128
+        volumeMounts:
+        - name: shared-logs
+          mountPath: /var/log/squid
+        - name: squid-config-volume
+          mountPath: /etc/squid/squid.conf
+          subPath: squid.conf
+
+      # Producer Container: Reads access.log, aggregates telemetry, and publishes to Kafka
+      - name: producer
+        image: live-producer:v1
+        imagePullPolicy: Never
+        env:
+        # Kafka broker connection string
+        - name: KAFKA_BOOTSTRAP_SERVER
+          value: "demo-kafka-bootstrap.slicescope.svc.cluster.local:9082"
+        volumeMounts:
+        - name: shared-logs
+          mountPath: /var/log/squid
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy-service
+spec:
+  selector:
+    app: squid-proxy
+  ports:
+    - name: tcp-squid
+      protocol: TCP
+      # Expose standard Squid port to the cluster
+      port: 3128
+      targetPort: 3128
+

@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user1-heavy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-generator
+      ml-ue: "UE1"
+  template:
+    metadata:
+      labels:
+        app: traffic-generator
+        ml-ue: "UE1"
+        # Indicates the dominant application profile for this UE instance
+        ml-app: "web-rtc"
+    spec:
+      containers:
+      - name: python-user
+        image: traffic-gen:v1
+        imagePullPolicy: Never
+        # The -u flag forces stdin, stdout, and stderr to be totally unbuffered.
+        # For real-time log streaming via kubectl logs.
+        command: ["python", "-u"]
+        args: ["heavy_user.py"]
+        env:
+        # Route standard HTTP/HTTPS payload traffic through the Squid proxy for telemetry extraction
+        - name: http_proxy
+          value: "http://proxy-service:3128"
+        - name: https_proxy
+          value: "http://proxy-service:3128"
+        # Explicitly bypass the proxy for control-plane requests to the Environment Controller
+        - name: no_proxy
+          value: "env-controller-service.slicescope.svc.cluster.local"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user2-medium
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-generator
+      ml-ue: "UE2"
+  template:
+    metadata:
+      labels:
+        app: traffic-generator
+        ml-ue: "UE2"
+        ml-app: "sipp"
+    spec:
+      containers:
+      - name: python-user
+        image: traffic-gen:v1
+        imagePullPolicy: Never
+        command: ["python", "-u"]
+        args: ["medium_user.py"]
+        env:
+        - name: http_proxy
+          value: "http://proxy-service:3128"
+        - name: https_proxy
+          value: "http://proxy-service:3128"
+        - name: no_proxy
+          value: "env-controller-service.slicescope.svc.cluster.local"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user3-light
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-generator
+      ml-ue: "UE3"
+  template:
+    metadata:
+      labels:
+        app: traffic-generator
+        ml-ue: "UE3"
+        ml-app: "web-server"
+    spec:
+      containers:
+      - name: python-user
+        image: traffic-gen:v1
+        imagePullPolicy: Never
+        command: ["python", "-u"]
+        args: ["light_user.py"]
+        env:
+        - name: http_proxy
+          value: "http://proxy-service:3128"
+        - name: https_proxy
+          value: "http://proxy-service:3128"
+        - name: no_proxy
+          value: "env-controller-service.slicescope.svc.cluster.local"
+
